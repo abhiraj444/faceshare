@@ -2,8 +2,9 @@ import { useState, useEffect } from "react";
 import { Copy, Check, Share2, ExternalLink, Loader2, Sparkles, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { Params } from "@/lib/face-particles/types";
+import type { Params, ParticleSet } from "@/lib/face-particles/types";
 import { saveSharedPortrait } from "@/lib/server-share";
+import { serializeParticleSet } from "@/lib/face-particles/serialize";
 
 interface ShareDialogProps {
   open: boolean;
@@ -12,6 +13,7 @@ interface ShareDialogProps {
   currentStudyId: string | null;
   canvas: HTMLCanvasElement | null;
   sourceCanvas: HTMLCanvasElement | null;
+  particleSet: ParticleSet | null;
   cameraPose: { yaw: number; pitch: number; zoom: number };
 }
 
@@ -22,6 +24,7 @@ export function ShareDialog({
   currentStudyId,
   canvas,
   sourceCanvas,
+  particleSet,
   cameraPose,
 }: ShareDialogProps) {
   const [shareUrl, setShareUrl] = useState<string>("");
@@ -68,12 +71,23 @@ export function ShareDialog({
           }
         }
 
+        // Serialize exact 3D particle positions, colors, tones & depth losslessly
+        let particleData: string | undefined = undefined;
+        if (particleSet && particleSet.count > 0) {
+          try {
+            particleData = await serializeParticleSet(particleSet);
+          } catch (e) {
+            console.warn("Failed to serialize 3D particle structure for share:", e);
+          }
+        }
+
         // Persist via server function
         const payload = {
           id: shareId,
           title: currentStudyId ? `3D Portrait - ${currentStudyId}` : "Custom 3D Structure",
           studyId: currentStudyId ?? undefined,
           imageData,
+          particleData,
           params: { ...params } as Record<string, unknown>,
           yaw: cameraPose.yaw,
           pitch: cameraPose.pitch,
@@ -109,7 +123,7 @@ export function ShareDialog({
     };
 
     generateLink();
-  }, [open, currentStudyId, canvas, sourceCanvas, params, cameraPose]);
+  }, [open, currentStudyId, canvas, sourceCanvas, particleSet, params, cameraPose]);
 
   if (!open) return null;
 
@@ -199,7 +213,7 @@ export function ShareDialog({
             <div className="font-medium truncate flex items-center gap-1.5">
               <span>{currentStudyId ? `Study: ${currentStudyId.toUpperCase()}` : "Custom 3D Structure"}</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono">
-                {Math.round(params.particles / 1000)}k pts
+                {particleSet ? `${particleSet.count.toLocaleString()} pts` : `${Math.round(params.particles / 1000)}k pts`}
               </span>
             </div>
             <div className={cn("text-[11px] truncate", params.invert ? "text-neutral-500" : "text-fg-subtle")}>
@@ -207,7 +221,7 @@ export function ShareDialog({
             </div>
             <div className="flex items-center gap-1 text-[10px] text-emerald-400">
               <Globe className="w-3 h-3" />
-              <span>Full 3D interactivity preserved</span>
+              <span>100% Lossless 3D particle structure (instant load)</span>
             </div>
           </div>
         </div>

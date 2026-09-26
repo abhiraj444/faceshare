@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS shared_portraits (
   title TEXT,
   study_id TEXT,
   image_data TEXT,
+  particle_data TEXT,
   params JSONB NOT NULL,
   yaw REAL NOT NULL DEFAULT 0,
   pitch REAL NOT NULL DEFAULT 0.04,

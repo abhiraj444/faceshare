@@ -47,6 +47,7 @@ import { PrintDialog } from "@/components/face-particles/print-dialog";
 import { TextDialog } from "@/components/face-particles/text-dialog";
 import { ShareDialog } from "@/components/face-particles/share-dialog";
 import { getSharedPortrait } from "@/lib/server-share";
+import { deserializeParticleSet } from "@/lib/face-particles/serialize";
 import type { AnimState, EffectName, Params } from "@/lib/face-particles/types";
 
 type Busy = { stage: string; fraction: number } | null;
@@ -298,15 +299,70 @@ export function FaceParticlesApp() {
               paramsRef.current = { ...paramsRef.current, ...data.params };
             }
 
-            if (data.studyId) {
+            if (data.particleData) {
+              setBusy({ stage: "Loading 100% lossless 3D structure", fraction: 0.8 });
+              try {
+                const particleSet = await deserializeParticleSet(data.particleData);
+                const engine = engineRef.current;
+                if (engine && particleSet) {
+                  engine.load(particleSet);
+                  engine.play("assemble");
+                  engine.assemble = 1;
+                  engine.targetAssemble = 1;
+
+                  const dummyCanvas = document.createElement("canvas");
+                  dummyCanvas.width = 1;
+                  dummyCanvas.height = 1;
+
+                  cacheRef.current = {
+                    key: `shared_${data.id}`,
+                    params: { ...paramsRef.current },
+                    crop: {
+                      canvas: dummyCanvas,
+                      cropRect: [0, 0, 1, 1],
+                      sourceW: 1,
+                      sourceH: 1,
+                    },
+                    vision: {
+                      hasFace: true,
+                      landmarks: null,
+                      classes: null,
+                      classW: 1,
+                      classH: 1,
+                      sourceW: 1,
+                      sourceH: 1,
+                      degraded: { landmarker: false, segmenter: false },
+                    },
+                    set: particleSet,
+                  };
+                  setCurrentStudyId(data.studyId ?? null);
+                }
+                setSharedBanner(`Viewing 100% Lossless 3D Structure (${particleSet.count.toLocaleString()} particles)`);
+              } catch (deserializeErr) {
+                console.warn("Failed to deserialize direct particleData, falling back:", deserializeErr);
+                if (data.studyId) {
+                  const s = SAMPLES.find((x) => x.id === data.studyId);
+                  if (s) {
+                    setCurrentStudyId(s.id);
+                    await runSource(() => generateFromUrl(s.src, paramsRef.current, setBusy));
+                  }
+                } else if (data.imageData) {
+                  setCurrentStudyId(null);
+                  await runSource(() => generateFromUrl(data.imageData, paramsRef.current, setBusy));
+                }
+                setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
+              }
+            } else if (data.studyId) {
               const s = SAMPLES.find((x) => x.id === data.studyId);
               if (s) {
                 setCurrentStudyId(s.id);
                 await runSource(() => generateFromUrl(s.src, paramsRef.current, setBusy));
               }
+              setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
             } else if (data.imageData) {
               setCurrentStudyId(null);
               await runSource(() => generateFromUrl(data.imageData, paramsRef.current, setBusy));
+              setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
             }
 
             const engine = engineRef.current;
@@ -316,7 +372,6 @@ export function FaceParticlesApp() {
               if (data.zoom != null) engine.setUserZoom(data.zoom);
             }
 
-            setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
             window.setTimeout(() => setSharedBanner(null), 5000);
           }
         } catch (e) {
@@ -1714,6 +1769,7 @@ export function FaceParticlesApp() {
         currentStudyId={currentStudyId}
         canvas={canvasRef.current}
         sourceCanvas={cacheRef.current?.crop?.canvas ?? null}
+        particleSet={cacheRef.current?.set ?? engineRef.current?.getParticleSet() ?? null}
         cameraPose={{
           yaw: engineRef.current?.yaw ?? 0,
           pitch: engineRef.current?.pitch ?? 0.04,
