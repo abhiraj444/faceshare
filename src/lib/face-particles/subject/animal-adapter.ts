@@ -2,11 +2,13 @@ import type { CropResult, Params } from "../types";
 import type { SubjectField } from "./subject-field";
 import { workingSize } from "../config";
 import { clamp } from "../math";
+import { cleanBackgroundAndIsolateSubject } from "../background-cleaner";
 
 /**
- * AnimalAdapter (v2 Remediation §5.2):
- * Universal adapter for dogs, cats, horses, and wildlife.
- * Fits an anatomical animal head 3D field:
+ * AnimalAdapter:
+ * Universal adapter for dogs, cats, pets, and wildlife.
+ * Cleans the background (grass, floor, carpet, room), isolates the animal subject,
+ * and fits an anatomical animal head 3D field:
  * - Volumetric skull dome
  * - Forward-projecting snout / muzzle (+Z extension in lower-center)
  * - Eye socket depth depressions
@@ -18,6 +20,10 @@ export function buildAnimalSubject(
   _params: Params,
 ): SubjectField {
   const { w: outW, h: outH } = workingSize();
+
+  // Run comprehensive background cleaner to isolate the animal from environment
+  const bgClean = cleanBackgroundAndIsolateSubject(source);
+
   const canvas = document.createElement("canvas");
   canvas.width = outW;
   canvas.height = outH;
@@ -27,13 +33,14 @@ export function buildAnimalSubject(
   ctx.fillStyle = "#050506";
   ctx.fillRect(0, 0, outW, outH);
 
-  // Scale & center source image with healthy margin
-  const scale = Math.min(outW / source.width, outH / source.height) * 0.94;
-  const drawW = source.width * scale;
-  const drawH = source.height * scale;
-  const drawX = (outW - drawW) / 2;
-  const drawY = (outH - drawH) / 2;
-  ctx.drawImage(source, drawX, drawY, drawW, drawH);
+  // Scale & center source image with comfortable margin
+  const scale = Math.min(outW / source.width, outH / source.height) * 0.92;
+  const drawW = Math.round(source.width * scale);
+  const drawH = Math.round(source.height * scale);
+  const drawX = Math.round((outW - drawW) / 2);
+  const drawY = Math.round((outH - drawH) / 2);
+
+  ctx.drawImage(bgClean.cleanedCanvas, drawX, drawY, drawW, drawH);
 
   const imgData = ctx.getImageData(0, 0, outW, outH);
   const px = imgData.data;
@@ -44,46 +51,28 @@ export function buildAnimalSubject(
   const depthMap = new Float32Array(outW * outH);
   const depthConfidence = new Float32Array(outW * outH);
 
-  // Background estimation from borders and corners
-  let bgR = 0, bgG = 0, bgB = 0;
-  const samplePoints: [number, number][] = [
-    [4, 4], [outW - 5, 4], [4, outH - 5], [outW - 5, outH - 5],
-    [Math.floor(outW * 0.1), 4], [Math.floor(outW * 0.9), 4],
-  ];
-  for (const [cx, cy] of samplePoints) {
-    const idx = (cy * outW + cx) * 4;
-    bgR += px[idx]!;
-    bgG += px[idx + 1]!;
-    bgB += px[idx + 2]!;
-  }
-  bgR /= samplePoints.length;
-  bgG /= samplePoints.length;
-  bgB /= samplePoints.length;
+  const srcW = source.width;
+  const srcH = source.height;
 
   let m00 = 0, m10 = 0, m01 = 0;
-  for (let y = 0; y < outH; y++) {
-    for (let x = 0; x < outW; x++) {
-      const idx = (y * outW + x) * 4;
-      const r = px[idx]!;
-      const g = px[idx + 1]!;
-      const b = px[idx + 2]!;
+  for (let dy = 0; dy < drawH; dy++) {
+    const y = drawY + dy;
+    if (y < 0 || y >= outH) continue;
+    const sy = Math.min(srcH - 1, Math.max(0, Math.floor(dy / scale)));
 
-      // Distance from background color
-      const dColor = Math.sqrt((r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2);
-      const dxNorm = (x - outW / 2) / (outW / 2);
-      const dyNorm = (y - outH / 2) / (outH / 2);
-      const distFromCenter = Math.sqrt(dxNorm * dxNorm + dyNorm * dyNorm);
-      const centerFactor = clamp(1.45 - distFromCenter * 0.75, 0.25, 1.25);
+    for (let dx = 0; dx < drawW; dx++) {
+      const x = drawX + dx;
+      if (x < 0 || x >= outW) continue;
+      const sx = Math.min(srcW - 1, Math.max(0, Math.floor(dx / scale)));
 
-      // Higher sensitivity so dark muzzle and black fur don't get clipped away
-      const mVal = clamp((dColor / 32) * centerFactor, 0, 1);
+      const mVal = bgClean.mask[sy * srcW + sx] ?? 0;
       const i = y * outW + x;
+
       mask[i] = mVal;
-      // Fur and head elements are all classified as subject
-      hairSkin[i] = mVal > 0.25 ? 1 : 0;
+      hairSkin[i] = mVal > 0.2 ? 1 : 0;
       faceSkin[i] = mVal > 0.35 ? 1 : 0;
 
-      if (mVal > 0.25) {
+      if (mVal > 0.2) {
         m00 += mVal;
         m10 += x * mVal;
         m01 += y * mVal;
@@ -101,7 +90,7 @@ export function buildAnimalSubject(
     for (let x = 0; x < outW; x++) {
       const i = y * outW + x;
       const wVal = mask[i]!;
-      if (wVal > 0.25) {
+      if (wVal > 0.2) {
         u20 += (x - centerX) ** 2 * wVal;
         u02 += (y - centerY) ** 2 * wVal;
       }
@@ -118,14 +107,16 @@ export function buildAnimalSubject(
   const snoutRadY = radY * 0.32;
 
   // Volumetric animal depth synthesis:
-  // 1. Base cranial dome
-  // 2. Snout cone projection
-  // 3. Eye socket depth cavities
-  // 4. Fur detail relief
   for (let y = 0; y < outH; y++) {
     for (let x = 0; x < outW; x++) {
       const i = y * outW + x;
       const m = mask[i]!;
+
+      if (m < 0.04) {
+        depthMap[i] = 0.0;
+        depthConfidence[i] = 0.0;
+        continue;
+      }
 
       // 1. Cranial ellipsoidal base dome
       const nx = (x - centerX) / radX;
@@ -140,7 +131,7 @@ export function buildAnimalSubject(
       const sDist = Math.sqrt(sx * sx + sy * sy);
       const snoutCone = sDist < 1.0 ? 0.5 * (1.0 + Math.cos(sDist * Math.PI)) * 0.42 : 0.0;
 
-      // 3. Eye socket depressions (left and right above snout)
+      // 3. Eye socket depressions
       const leftEyeDist = Math.hypot((x - (centerX - radX * 0.32)) / (radX * 0.2), (y - (centerY - radY * 0.15)) / (radY * 0.2));
       const rightEyeDist = Math.hypot((x - (centerX + radX * 0.32)) / (radX * 0.2), (y - (centerY - radY * 0.15)) / (radY * 0.2));
       const eyeCavity = (leftEyeDist < 1.0 ? (1.0 - leftEyeDist) * 0.08 : 0.0) +
@@ -153,7 +144,7 @@ export function buildAnimalSubject(
 
       // Total blended depth: Base Cranial Dome + Snout Projection - Eye Cavity + Fur
       const rawDepth = (headDome + snoutCone - eyeCavity + furRelief) * (0.45 + 0.55 * m);
-      depthMap[i] = clamp(rawDepth, 0.0, 1.0);
+      depthMap[i] = clamp(rawDepth, 0.0, 1.0) * m;
       depthConfidence[i] = m;
     }
   }
@@ -194,3 +185,4 @@ export function buildAnimalSubject(
     crop,
   };
 }
+

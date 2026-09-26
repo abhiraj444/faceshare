@@ -1,10 +1,12 @@
 import { clamp } from "./math";
+import { cleanBackgroundAndIsolateSubject, type BackgroundCleanResult } from "./background-cleaner";
 
 export interface PreprocessOptions {
   denoise?: boolean;
   normalizeExposure?: boolean;
   upscaleLowRes?: boolean;
   minDimension?: number;
+  cleanBackground?: boolean;
 }
 
 const DEFAULT_OPTIONS: Required<PreprocessOptions> = {
@@ -12,10 +14,20 @@ const DEFAULT_OPTIONS: Required<PreprocessOptions> = {
   normalizeExposure: true,
   upscaleLowRes: true,
   minDimension: 512,
+  cleanBackground: true,
 };
+
+export interface PreprocessResult {
+  canvas: HTMLCanvasElement;
+  applied: boolean;
+  bgCleanResult?: BackgroundCleanResult;
+}
 
 /**
  * Preprocessing & Cleaning Pipeline (Phase 1):
+ * - Primary Background Cleanup & Subject Isolation:
+ *   Detects background, separates subject (face, signature, fingerprint, animal, object),
+ *   and eliminates background noise/paper texture before any particle sampling.
  * - Auto-exposure / Dynamic range histogram normalization (fixes underexposed/washed out photos)
  * - Bilateral edge-preserving spatial denoiser (eliminates camera grain that causes depth spikes)
  * - Bicubic super-resolution upscale with unsharp mask (reconstructs low-res crops under 512px)
@@ -23,7 +35,7 @@ const DEFAULT_OPTIONS: Required<PreprocessOptions> = {
 export function preprocessImage(
   source: HTMLCanvasElement,
   options?: PreprocessOptions,
-): { canvas: HTMLCanvasElement; applied: boolean } {
+): PreprocessResult {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const origW = source.width;
   const origH = source.height;
@@ -32,15 +44,31 @@ export function preprocessImage(
     return { canvas: source, applied: false };
   }
 
-  // 1. Super-resolution / Upscale check
+  // 1. Primary Background Cleanup & Subject Isolation
   let currentCanvas = source;
-  const minDim = Math.min(origW, origH);
+  let bgCleanResult: BackgroundCleanResult | undefined = undefined;
+
+  if (opts.cleanBackground) {
+    try {
+      bgCleanResult = cleanBackgroundAndIsolateSubject(currentCanvas);
+      // For document/graphic inputs (signatures, fingerprints, line-art, sketches),
+      // use the cleaned canvas directly so ink/ridges stand out cleanly on dark gallery void!
+      if (bgCleanResult.isDocumentOrGraphic) {
+        currentCanvas = bgCleanResult.cleanedCanvas;
+      }
+    } catch (err) {
+      console.warn("[Preprocess] Background cleaning non-fatal fallback:", err);
+    }
+  }
+
+  // 2. Super-resolution / Upscale check
+  const minDim = Math.min(currentCanvas.width, currentCanvas.height);
   let wasUpscaled = false;
 
   if (opts.upscaleLowRes && minDim < opts.minDimension) {
     const scale = Math.min(2.5, opts.minDimension / minDim);
-    const newW = Math.round(origW * scale);
-    const newH = Math.round(origH * scale);
+    const newW = Math.round(currentCanvas.width * scale);
+    const newH = Math.round(currentCanvas.height * scale);
     const upCanvas = document.createElement("canvas");
     upCanvas.width = newW;
     upCanvas.height = newH;
@@ -48,7 +76,7 @@ export function preprocessImage(
     if (upCtx) {
       upCtx.imageSmoothingEnabled = true;
       upCtx.imageSmoothingQuality = "high";
-      upCtx.drawImage(source, 0, 0, newW, newH);
+      upCtx.drawImage(currentCanvas, 0, 0, newW, newH);
       currentCanvas = upCanvas;
       wasUpscaled = true;
     }
@@ -57,14 +85,16 @@ export function preprocessImage(
   const w = currentCanvas.width;
   const h = currentCanvas.height;
   const ctx = currentCanvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return { canvas: currentCanvas, applied: wasUpscaled };
+  if (!ctx) return { canvas: currentCanvas, applied: wasUpscaled, bgCleanResult };
 
   const imgData = ctx.getImageData(0, 0, w, h);
   const data = imgData.data;
   const nPixels = w * h;
 
-  // 2. Exposure & Contrast Analysis (Auto-Levels Histogram Stretch)
-  if (opts.normalizeExposure && nPixels > 100) {
+  // 3. Exposure & Contrast Analysis (Auto-Levels Histogram Stretch)
+  // Skip aggressive histogram stretching if already converted to clean dark-void graphic
+  const isDarkGraphic = bgCleanResult?.isDocumentOrGraphic && bgCleanResult.isLightBg;
+  if (opts.normalizeExposure && nPixels > 100 && !isDarkGraphic) {
     const hist = new Uint32Array(256);
     // Sample luminance across pixels
     for (let i = 0; i < nPixels; i++) {

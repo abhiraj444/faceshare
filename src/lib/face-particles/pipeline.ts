@@ -101,20 +101,21 @@ export async function generateFromCanvas(
   params: Params,
   onProgress?: (p: PipelineProgress) => void,
 ): Promise<PipelineCache> {
-  // Phase 1: Preprocessing & Noise Cleaning Pipeline
-  onProgress?.({ stage: "Preprocessing: Denoise & exposure normalization", fraction: 0.1 });
-  const { canvas: img } = preprocessImage(rawImg, {
+  // Phase 1: Preprocessing & Primary Background Cleaning Pipeline
+  onProgress?.({ stage: "Cleaning background & isolating subject", fraction: 0.1 });
+  const { canvas: img, bgCleanResult } = preprocessImage(rawImg, {
     denoise: true,
     normalizeExposure: true,
     upscaleLowRes: true,
     minDimension: 512,
+    cleanBackground: params.removeBg,
   });
 
   onProgress?.({ stage: "Analyzing subject", fraction: 0.2 });
   const vision = await analyze(img);
 
   // Subject Classifier: Face vs Text/Graphic vs Animal vs Object
-  const subjectType = classifySubject(img, vision);
+  const subjectType = classifySubject(img, vision, { bgCleanResult });
 
   if (subjectType === "text") {
     onProgress?.({ stage: "Detected graphic / text · Centering and sculpting 3D form", fraction: 0.4 });

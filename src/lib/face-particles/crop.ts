@@ -2,6 +2,7 @@ import type { CropResult, Landmark, Params, VisionResult } from "./types";
 import { workingSize } from "./config";
 import { IDX } from "./landmarks";
 import { clamp } from "./math";
+import { cleanBackgroundAndIsolateSubject } from "./background-cleaner";
 
 const CLASS_HAIR = 1;
 const CLASS_BODY = 2;
@@ -226,48 +227,49 @@ export function headCrop(
       }
     }
   } else {
-    const cx = outW * 0.5;
-    const cy = outH * 0.44;
-    const rx = outW * 0.36;
-    const ry = outH * 0.42;
-
-    // Sample border pixels to detect if background is light/white or dark
-    const px = imageData.data;
-    let bLum = 0;
-    let bCount = 0;
-    for (let x = 0; x < outW; x += 16) {
-      const topP = x * 4;
-      const btmP = ((outH - 1) * outW + x) * 4;
-      bLum += (px[topP]! + px[topP + 1]! + px[topP + 2]!) / 3;
-      bLum += (px[btmP]! + px[btmP + 1]! + px[btmP + 2]!) / 3;
-      bCount += 2;
-    }
-    const borderLum = bLum / Math.max(1, bCount);
-    const isLightBg = borderLum > 140;
-
-    for (let y = 0; y < outH; y++) {
-      for (let x = 0; x < outW; x++) {
-        const i = y * outW + x;
-        const p = i * 4;
-        const lum = (px[p]! + px[p + 1]! + px[p + 2]!) / 3;
-
-        // If light background, empty out pixels that match the white/light background
-        if (isLightBg && Math.abs(lum - borderLum) < 30) {
-          mask[i] = 0;
-          hairSkin[i] = 0;
-          faceSkin[i] = 0;
-          continue;
-        }
-
-        const nx = (x - cx) / rx;
-        const ny = (y - cy) / ry;
-        const d = nx * nx + ny * ny;
-        const m = d < 1 ? clamp(1 - (d - 0.72) / 0.28, 0, 1) : 0;
+    // MediaPipe segmenter fallback: run intelligent color & edge background cleaner
+    try {
+      const bgClean = cleanBackgroundAndIsolateSubject(canvas);
+      for (let i = 0; i < outW * outH; i++) {
+        const m = bgClean.mask[i] ?? 0;
         mask[i] = m;
         hairSkin[i] = m > 0.2 ? 1 : 0;
-        faceSkin[i] = ny > -0.15 && d < 0.72 ? m : 0;
+        faceSkin[i] = m > 0.35 ? 1 : 0;
+      }
+    } catch {
+      const cx = outW * 0.5;
+      const cy = outH * 0.44;
+      const rx = outW * 0.36;
+      const ry = outH * 0.42;
+
+      for (let y = 0; y < outH; y++) {
+        for (let x = 0; x < outW; x++) {
+          const i = y * outW + x;
+          const nx = (x - cx) / rx;
+          const ny = (y - cy) / ry;
+          const d = nx * nx + ny * ny;
+          const m = d < 1 ? clamp(1 - (d - 0.72) / 0.28, 0, 1) : 0;
+          mask[i] = m;
+          hairSkin[i] = m > 0.2 ? 1 : 0;
+          faceSkin[i] = ny > -0.15 && d < 0.72 ? m : 0;
+        }
       }
     }
+  }
+
+  // Replace background on the crop canvas with obsidian gallery void (#050506)
+  if (params.removeBg) {
+    const px = imageData.data;
+    for (let i = 0; i < outW * outH; i++) {
+      const m = mask[i]!;
+      if (m < 0.05) {
+        const p = i * 4;
+        px[p] = 5;
+        px[p + 1] = 5;
+        px[p + 2] = 6;
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
   }
 
   return {

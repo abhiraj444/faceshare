@@ -199,9 +199,16 @@ export function buildWeights(crop: CropResult, params: Params): WeightMaps {
     const subjectMask = Math.max(hairSkin[i] ?? 0, (faceSkin[i] ?? 0));
     wv = Math.max(wv, subjFloor * subjectMask * (1.0 + edges[i]! * 0.5));
     if (params.removeBg) {
+      const rawM = mask[i] ?? 0;
       const m = M[i]!;
-      // Clean background cutoff: completely erases particles from room/wall background
-      wv = m < 0.04 ? 0 : wv * m;
+      // Clean background cutoff: completely erases particles from room, wall, desk, or paper background
+      if (rawM < 0.03 && m < 0.12) {
+        wv = 0;
+      } else if (m < 0.08) {
+        wv = 0;
+      } else {
+        wv = wv * Math.pow(m, 1.35);
+      }
     }
     weight[i] = wv;
   }

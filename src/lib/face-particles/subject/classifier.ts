@@ -1,15 +1,21 @@
 import type { VisionResult } from "../types";
 import type { SubjectType } from "./subject-field";
+import type { BackgroundCleanResult } from "../background-cleaner";
 
 export interface ClassifierOptions {
   explicitType?: SubjectType;
   isText?: boolean;
+  bgCleanResult?: BackgroundCleanResult;
 }
 
 /**
- * SubjectClassifier (v2 Remediation §5.1):
- * Inspects the input and vision signals to route processing to the optimal SubjectAdapter.
- * User manual override takes precedence.
+ * SubjectClassifier:
+ * Inspects the input, vision signals, and background cleaning results
+ * to route processing to the optimal SubjectAdapter:
+ * - "face": Human portrait confirmed by MediaPipe Vision
+ * - "text": Signatures, fingerprints, handwriting, line-art, logos, sketches on paper/void
+ * - "animal": Dogs, cats, pets, wildlife with volumetric head/muzzle
+ * - "object": Still life, sculptures, products, vehicles, architecture
  */
 export function classifySubject(
   source: HTMLCanvasElement | string,
@@ -26,19 +32,22 @@ export function classifySubject(
     return "text";
   }
 
+  // Document/graphic detected by primary background cleaner (signatures, fingerprints, sketches)
+  if (options?.bgCleanResult?.isDocumentOrGraphic) {
+    return "text";
+  }
+
   // Human face confirmed by MediaPipe Vision
   if (vision && vision.hasFace) {
     return "face";
   }
 
   // If no face was detected by MediaPipe, analyze canvas heuristics
-  // (e.g. Aspect ratio, edge density, color contrast)
   const w = source.width;
   const h = source.height;
   const ctx = source.getContext("2d", { willReadFrequently: true });
   if (!ctx) return "object";
 
-  // Check if image looks like text/handwriting/drawing/logo
   try {
     const sampleW = Math.min(w, 256);
     const sampleH = Math.min(h, 256);
@@ -59,7 +68,6 @@ export function classifySubject(
 
     let satSum = 0;
     let fgPixels = 0;
-    let _edgeContrastCount = 0;
 
     for (let i = 0; i < n; i++) {
       const p = i * 4;
@@ -71,30 +79,26 @@ export function classifySubject(
       satSum += max === 0 ? 0 : (max - min) / max;
 
       const lum = (r + g + b) / 3;
-      if (Math.abs(lum - borderAvgLum) > 35) {
+      if (Math.abs(lum - borderAvgLum) > 28) {
         fgPixels++;
-      }
-      if (i > 1 && Math.abs(lum - ((data[p - 4]! + data[p - 3]! + data[p - 2]!) / 3)) > 30) {
-        _edgeContrastCount++;
       }
     }
 
     const avgSat = satSum / Math.max(1, n);
     const fgRatio = fgPixels / Math.max(1, n);
 
-    // If image has light background (white paper / canvas) with dark handwriting or strokes,
-    // or low saturation with sparse foreground (sketches, handwriting, text), route to text/graphic!
-    if (borderAvgLum > 140 && fgRatio < 0.45) {
+    // Signatures, fingerprints, stamps, or drawings on paper (light background with low color saturation)
+    if (borderAvgLum > 110 && avgSat < 0.3) {
       return "text";
     }
 
-    // High contrast monochrome line art or text on dark background
-    if (avgSat < 0.12 && fgRatio > 0.01 && fgRatio < 0.45) {
+    // High contrast monochrome line art, fingerprints, or text on dark background
+    if (avgSat < 0.14 && fgRatio > 0.005 && fgRatio < 0.75) {
       return "text";
     }
 
-    // Photographic color images with high saturation and dense presence:
-    if (avgSat > 0.18 && fgRatio > 0.25) {
+    // Photographic color images with high saturation (pets, animals)
+    if (avgSat > 0.16 && fgRatio > 0.2) {
       return "animal";
     }
   } catch {
@@ -103,3 +107,4 @@ export function classifySubject(
 
   return "object";
 }
+
