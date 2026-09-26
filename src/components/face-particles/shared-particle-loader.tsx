@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Sparkles } from "lucide-react";
 
 interface SharedParticleLoaderProps {
-  progress: number; // 0 to 1
   isReady: boolean;
-  title?: string;
   onFinish?: () => void;
 }
 
@@ -12,10 +9,11 @@ interface SphereParticle {
   x: number;
   y: number;
   z: number;
-  baseRadius: number;
+  baseR: number;
   seed: number;
-  color: string;
   size: number;
+  alpha: number;
+  driftSpeed: number;
   vx?: number;
   vy?: number;
   vz?: number;
@@ -28,7 +26,6 @@ interface TextParticle {
   tx: number;
   ty: number;
   tz: number;
-  color: string;
   size: number;
   alpha: number;
   vx?: number;
@@ -36,31 +33,15 @@ interface TextParticle {
   vz?: number;
 }
 
-const PALETTE = [
-  "#00f5ff", // electric cyan
-  "#818cf8", // indigo
-  "#c084fc", // violet
-  "#f472b6", // pink
-  "#38bdf8", // sky
-  "#34d399", // emerald
-  "#fbbf24", // gold
-];
-
 export function SharedParticleLoader({
-  progress,
   isReady,
-  title = "3D Particle Portrait",
   onFinish,
 }: SharedParticleLoaderProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [displayPct, setDisplayPct] = useState(0);
-  const [exploding, setExploding] = useState(false);
-  const progressRef = useRef(progress);
-  const displayPctRef = useRef(0);
+  const [fadingOut, setFadingOut] = useState(false);
   const isReadyRef = useRef(isReady);
   const lastSampledText = useRef("");
 
-  progressRef.current = progress;
   isReadyRef.current = isReady;
 
   useEffect(() => {
@@ -71,47 +52,79 @@ export function SharedParticleLoader({
 
     let animId = 0;
     let sphereYaw = 0;
-    let spherePitch = 0.2;
+    let spherePitch = 0.08;
     let burstAge = 0;
     let finishedTriggered = false;
 
-    // Generate 3D sphere particles using Fibonacci spherical distribution
-    const SPHERE_COUNT = 2200;
-    const sphereRadius = Math.min(160, Math.min(window.innerWidth, window.innerHeight) * 0.22);
+    // Continuous float counter for the percentage (1.0 to 100.0)
+    let currentPctFloat = 1.0;
+
+    // Canvas size
+    let width = 0;
+    let height = 0;
+    let sphereRadius = 180;
+
+    function resize() {
+      if (!canvas) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = canvas.getBoundingClientRect();
+      width = Math.round(rect.width * dpr);
+      height = Math.round(rect.height * dpr);
+      canvas.width = width;
+      canvas.height = height;
+
+      // Fills half the screen (diameter ≈ 80-85% of screen width on mobile, or 42% of min dimension)
+      const minDim = Math.min(width, height) / dpr;
+      sphereRadius = minDim * 0.42;
+    }
+
+    resize();
+    window.addEventListener("resize", resize);
+
+    // Generate volumetric, somewhat randomized monochrome sphere particles
+    const SPHERE_COUNT = 3200;
     const sphereParticles: SphereParticle[] = [];
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
 
     for (let i = 0; i < SPHERE_COUNT; i++) {
-      const phi = Math.acos(1 - (2 * (i + 0.5)) / SPHERE_COUNT);
-      const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-      const r = sphereRadius * (0.95 + Math.random() * 0.1);
+      // Natural non-uniform angular jitter for "somewhat random" organic look
+      const t = i / SPHERE_COUNT;
+      const phi = Math.acos(1 - 2 * t) + (Math.random() - 0.5) * 0.12;
+      const theta = goldenAngle * i + (Math.random() - 0.5) * 0.25;
+
+      // Volumetric cloud thickness: particles are dispersed with natural Gaussian depth around sphere radius
+      const radialNoise = (Math.random() - 0.5) * 0.35 + (Math.random() - 0.5) * 0.2;
+      const r = (1.0 + radialNoise) * (0.9 + Math.random() * 0.2);
+
       const x = r * Math.sin(phi) * Math.cos(theta);
       const y = r * Math.cos(phi);
       const z = r * Math.sin(phi) * Math.sin(theta);
-      const color = PALETTE[i % PALETTE.length];
+
       sphereParticles.push({
         x,
         y,
         z,
-        baseRadius: r,
-        seed: Math.random() * 6.28,
-        color,
-        size: 1.2 + Math.random() * 1.6,
+        baseR: r,
+        seed: Math.random() * Math.PI * 2,
+        size: 0.9 + Math.random() * 1.5,
+        alpha: 0.25 + Math.random() * 0.65,
+        driftSpeed: 0.4 + Math.random() * 0.8,
       });
     }
 
-    // Text particle pool
+    // Text particle pool for monochrome 3D percentage text
     let textParticles: TextParticle[] = [];
 
-    // Helper to rasterize percentage text into 3D particles
+    // Offscreen canvas for sampling monochrome percentage text
     const offscreen = document.createElement("canvas");
-    offscreen.width = 280;
-    offscreen.height = 140;
+    offscreen.width = 320;
+    offscreen.height = 160;
     const offCtx = offscreen.getContext("2d", { willReadFrequently: true });
 
     function sampleTextParticles(text: string) {
       if (!offCtx) return;
       offCtx.clearRect(0, 0, offscreen.width, offscreen.height);
-      offCtx.font = "900 52px system-ui, -apple-system, 'SF Pro Display', sans-serif";
+      offCtx.font = "900 68px 'Outfit', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif";
       offCtx.textAlign = "center";
       offCtx.textBaseline = "middle";
       offCtx.fillStyle = "#ffffff";
@@ -122,39 +135,36 @@ export function SharedParticleLoader({
       const w = offscreen.width;
       const h = offscreen.height;
 
-      const newTargets: { x: number; y: number; z: number; color: string }[] = [];
-      const step = 4; // grid sampling density
+      const newTargets: { x: number; y: number; z: number }[] = [];
+      const step = 4; // grid density
 
       for (let y = 0; y < h; y += step) {
         for (let x = 0; x < w; x += step) {
           const idx = (y * w + x) * 4;
           const alpha = data[idx + 3];
-          if (alpha > 120) {
+          if (alpha > 128) {
+            // Center around (0,0,0)
             const relX = (x - w / 2) * 1.15;
             const relY = (y - h / 2) * 1.15;
-            // 3D curvature across text
-            const relZ = Math.cos((relX / (w * 0.5)) * 1.2) * 16 - 8;
-            // Color gradient across the text: Cyan -> Purple -> Coral
-            const u = x / w;
-            const col = u < 0.4 ? "#00f5ff" : u < 0.75 ? "#c084fc" : "#f472b6";
-            newTargets.push({ x: relX, y: relY, z: relZ, color: col });
+            // Slight 3D convex curvature across numbers
+            const relZ = Math.cos((relX / (w * 0.45)) * 1.2) * 14;
+            newTargets.push({ x: relX, y: relY, z: relZ });
           }
         }
       }
 
-      // Reconcile text particle pool
+      // Reconcile particle pool smoothly
       while (textParticles.length < newTargets.length) {
         const t = newTargets[textParticles.length];
         textParticles.push({
-          x: t.x + (Math.random() - 0.5) * 40,
-          y: t.y + (Math.random() - 0.5) * 40,
-          z: t.z + (Math.random() - 0.5) * 40,
+          x: t.x + (Math.random() - 0.5) * 30,
+          y: t.y + (Math.random() - 0.5) * 30,
+          z: t.z + (Math.random() - 0.5) * 30,
           tx: t.x,
           ty: t.y,
           tz: t.z,
-          color: t.color,
-          size: 2.2 + Math.random() * 1.4,
-          alpha: 1,
+          size: 1.8 + Math.random() * 1.2,
+          alpha: 0.95,
         });
       }
 
@@ -162,28 +172,14 @@ export function SharedParticleLoader({
         textParticles[i].tx = newTargets[i].x;
         textParticles[i].ty = newTargets[i].y;
         textParticles[i].tz = newTargets[i].z;
-        textParticles[i].color = newTargets[i].color;
       }
 
-      // Trim excess smoothly
       if (textParticles.length > newTargets.length) {
         textParticles = textParticles.slice(0, newTargets.length);
       }
     }
 
-    // Initial sample
-    sampleTextParticles("0%");
-
-    // Resize handling
-    function resize() {
-      if (!canvas) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = Math.round(rect.width * dpr);
-      canvas.height = Math.round(rect.height * dpr);
-    }
-    resize();
-    window.addEventListener("resize", resize);
+    sampleTextParticles("1%");
 
     let lastTime = performance.now();
 
@@ -191,23 +187,33 @@ export function SharedParticleLoader({
       const dt = Math.min(0.05, (time - lastTime) / 1000);
       lastTime = time;
 
-      // Smooth progress calculation
-      const targetPct = isReadyRef.current ? 100 : Math.min(96, Math.max(10, Math.round(progressRef.current * 100)));
-      displayPctRef.current += (targetPct - displayPctRef.current) * Math.min(1, dt * 5.5);
-      const roundedPct = Math.min(100, Math.round(displayPctRef.current));
-      setDisplayPct(roundedPct);
+      // CONTINUOUS PERCENTAGE INCREASE:
+      // It constantly ticks every single frame without stuttering or stopping.
+      if (!isReadyRef.current) {
+        // While waiting for data: advances smoothly from 1% up toward 95%
+        // Easing curve: faster at start, smoothly tapering, always advancing at least 8% per second
+        const remaining = 95 - currentPctFloat;
+        const rate = Math.max(7.5, remaining * 1.45);
+        currentPctFloat = Math.min(95.5, currentPctFloat + rate * dt);
+      } else {
+        // Data is ready: smoothly accelerates through the remaining numbers to 100%
+        const rate = Math.max(35, (100.5 - currentPctFloat) * 7.0);
+        currentPctFloat = Math.min(100, currentPctFloat + rate * dt);
+      }
 
-      const textStr = `${roundedPct}%`;
+      const displayInt = Math.max(1, Math.min(100, Math.floor(currentPctFloat)));
+      const textStr = `${displayInt}%`;
+
       if (textStr !== lastSampledText.current) {
         lastSampledText.current = textStr;
         sampleTextParticles(textStr);
       }
 
-      // Check if finished and trigger explosion
-      if (isReadyRef.current && roundedPct >= 99 && !finishedTriggered) {
-        setExploding(true);
+      // When reaching 100%, trigger smooth shockwave dispersion bloom and transition
+      if (currentPctFloat >= 99.8 && !finishedTriggered) {
+        setFadingOut(true);
         burstAge += dt;
-        if (burstAge > 0.6) {
+        if (burstAge > 0.5) {
           finishedTriggered = true;
           onFinish?.();
           return;
@@ -215,134 +221,139 @@ export function SharedParticleLoader({
       }
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const width = canvas.width;
-      const height = canvas.height;
       const cx = width / 2;
       const cy = height / 2;
 
       ctx.clearRect(0, 0, width, height);
 
-      // Rotation angles
-      sphereYaw += dt * (burstAge > 0 ? 3.0 : 0.85);
-      spherePitch = Math.sin(time * 0.0008) * 0.25;
+      // Continuous 3D rotation (yaw & gentle pitch wobble)
+      sphereYaw += dt * (burstAge > 0 ? 1.8 : 0.65);
+      spherePitch = Math.sin(time * 0.0006) * 0.12;
 
       const cosY = Math.cos(sphereYaw);
       const sinY = Math.sin(sphereYaw);
       const cosP = Math.cos(spherePitch);
       const sinP = Math.sin(spherePitch);
 
-      const fov = 380 * dpr;
+      const fov = 420 * dpr;
+      const currentRadius = sphereRadius * dpr;
 
-      // 1. Draw 3D outer sphere particles
+      // 1. Render 3D MONOCHROME Sphere Particles
       for (let i = 0; i < sphereParticles.length; i++) {
         const p = sphereParticles[i];
 
-        // Explosion velocity
+        let px = p.x * currentRadius;
+        let py = p.y * currentRadius;
+        const pz = p.z * currentRadius;
+
+        // Dispersion physics on complete
         if (burstAge > 0) {
           if (p.vx === undefined) {
             const mag = Math.hypot(p.x, p.y, p.z) || 1;
-            const speed = 400 + Math.random() * 600;
-            p.vx = (p.x / mag) * speed;
-            p.vy = (p.y / mag) * speed;
-            p.vz = (p.z / mag) * speed;
+            const blastSpeed = (450 + Math.random() * 550) * dpr;
+            p.vx = (p.x / mag) * blastSpeed;
+            p.vy = (p.y / mag) * blastSpeed;
+            p.vz = (p.z / mag) * blastSpeed;
           }
-          p.x += p.vx * dt;
-          p.y += p.vy * dt;
-          p.z += p.vz * dt;
+          p.x += (p.vx * dt) / currentRadius;
+          p.y += (p.vy * dt) / currentRadius;
+          p.z += (p.vz * dt) / currentRadius;
         } else {
-          // Subtle pulsation
-          const pulse = Math.sin(time * 0.003 + p.seed) * 3;
-          const curR = p.baseRadius + pulse;
-          const mag = Math.hypot(p.x, p.y, p.z) || 1;
-          p.x = (p.x / mag) * curR;
-          p.y = (p.y / mag) * curR;
-          p.z = (p.z / mag) * curR;
+          // Subtle organic drift / pulsation
+          const drift = Math.sin(time * 0.0015 * p.driftSpeed + p.seed) * 4 * dpr;
+          px += drift * 0.6;
+          py += drift * 0.4;
         }
 
-        // 3D rotation
-        const x1 = p.x * cosY + p.z * sinY;
-        const z1 = -p.x * sinY + p.z * cosY;
-        const y2 = p.y * cosP - z1 * sinP;
-        const z2 = p.y * sinP + z1 * cosP;
+        // 3D Matrix Rotation
+        const x1 = px * cosY + pz * sinY;
+        const z1 = -px * sinY + pz * cosY;
+        const y2 = py * cosP - z1 * sinP;
+        const z2 = py * sinP + z1 * cosP;
 
-        const depth = z2 + 350;
+        const depth = z2 + 480 * dpr;
         if (depth <= 10) continue;
 
         const scale = fov / depth;
         const sx = cx + x1 * scale;
         const sy = cy + y2 * scale;
 
-        // Depth-based opacity & size
-        const depthAlpha = Math.max(0.12, Math.min(0.9, (z2 + sphereRadius) / (sphereRadius * 2)));
-        const finalAlpha = burstAge > 0 ? depthAlpha * Math.max(0, 1 - burstAge * 1.8) : depthAlpha;
-        const pSize = Math.max(1, p.size * scale * (burstAge > 0 ? 1.5 : 1));
+        // Depth perspective alpha & size (pure monochrome stipple)
+        const depthNorm = Math.max(0, Math.min(1, (z2 + currentRadius) / (currentRadius * 2)));
+        let alpha = p.alpha * (0.2 + depthNorm * 0.8);
+        if (burstAge > 0) {
+          alpha *= Math.max(0, 1 - burstAge * 2.2);
+        }
 
-        ctx.globalAlpha = finalAlpha;
-        ctx.fillStyle = p.color;
+        const pointSize = Math.max(0.8, p.size * scale * (burstAge > 0 ? 1.3 : 1));
+
+        // Draw crisp monochrome particle
+        ctx.fillStyle = `rgba(242, 240, 236, ${alpha.toFixed(3)})`;
         ctx.beginPath();
-        ctx.arc(sx, sy, pSize, 0, Math.PI * 2);
+        ctx.arc(sx, sy, pointSize, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      // 2. Draw 3D colored particle text in the center
-      // The text faces camera but oscillates gently in 3D
-      const textYaw = Math.sin(time * 0.0012) * 0.12;
-      const textPitch = Math.cos(time * 0.001) * 0.08;
-      const tCosY = Math.cos(textYaw);
-      const tSinY = Math.sin(textYaw);
-      const tCosP = Math.cos(textPitch);
-      const tSinP = Math.sin(textPitch);
+      // 2. Render 3D MONOCHROME Percentage Text Particles
+      // Oscillates subtly in sync with sphere rotation
+      const tYaw = Math.sin(time * 0.0009) * 0.08;
+      const tPitch = Math.cos(time * 0.0008) * 0.05;
+      const tCosY = Math.cos(tYaw);
+      const tSinY = Math.sin(tYaw);
+      const tCosP = Math.cos(tPitch);
+      const tSinP = Math.sin(tPitch);
 
       for (let i = 0; i < textParticles.length; i++) {
         const tp = textParticles[i];
 
         if (burstAge > 0) {
           if (tp.vx === undefined) {
-            tp.vx = (Math.random() - 0.5) * 800;
-            tp.vy = (Math.random() - 0.5) * 800;
-            tp.vz = (Math.random() - 0.5) * 800;
+            tp.vx = (Math.random() - 0.5) * 600 * dpr;
+            tp.vy = (Math.random() - 0.5) * 600 * dpr;
+            tp.vz = (Math.random() - 0.5) * 600 * dpr;
           }
           tp.x += tp.vx * dt;
           tp.y += tp.vy * dt;
           tp.z += tp.vz * dt;
         } else {
-          // Smooth spring to target
-          tp.x += (tp.tx - tp.x) * Math.min(1, dt * 14);
-          tp.y += (tp.ty - tp.y) * Math.min(1, dt * 14);
-          tp.z += (tp.tz - tp.z) * Math.min(1, dt * 14);
+          // Spring smoothly to target
+          tp.x += (tp.tx * dpr - tp.x) * Math.min(1, dt * 16);
+          tp.y += (tp.ty * dpr - tp.y) * Math.min(1, dt * 16);
+          tp.z += (tp.tz * dpr - tp.z) * Math.min(1, dt * 16);
         }
 
-        // Apply subtle 3D tilt
+        // Apply 3D perspective
         const tx1 = tp.x * tCosY + tp.z * tSinY;
         const tz1 = -tp.x * tSinY + tp.z * tCosY;
         const ty2 = tp.y * tCosP - tz1 * tSinP;
         const tz2 = tp.y * tSinP + tz1 * tCosP;
 
-        const depth = tz2 + 350;
+        const depth = tz2 + 480 * dpr;
         if (depth <= 10) continue;
 
         const scale = fov / depth;
         const sx = cx + tx1 * scale;
         const sy = cy + ty2 * scale;
 
-        const pSize = Math.max(1.4, tp.size * scale * (burstAge > 0 ? 1.4 : 1));
-        const finalAlpha = burstAge > 0 ? Math.max(0, 1 - burstAge * 1.7) : 0.95;
+        const pSize = Math.max(1.2, tp.size * scale * dpr);
+        let alpha = tp.alpha;
+        if (burstAge > 0) {
+          alpha *= Math.max(0, 1 - burstAge * 2.0);
+        }
 
-        // Glow ring
-        ctx.globalAlpha = finalAlpha * 0.35;
-        ctx.fillStyle = tp.color;
+        // Soft halo
+        ctx.fillStyle = `rgba(255, 255, 255, ${(alpha * 0.2).toFixed(3)})`;
         ctx.beginPath();
-        ctx.arc(sx, sy, pSize * 2.2, 0, Math.PI * 2);
+        ctx.arc(sx, sy, pSize * 2.0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Bright particle core
-        ctx.globalAlpha = finalAlpha;
+        // Core bright point
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(3)})`;
         ctx.beginPath();
         ctx.arc(sx, sy, pSize, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      ctx.globalAlpha = 1.0;
       animId = requestAnimationFrame(render);
     }
 
@@ -356,44 +367,15 @@ export function SharedParticleLoader({
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/92 backdrop-blur-2xl transition-opacity duration-500 ${
-        exploding ? "opacity-0 pointer-events-none scale-105" : "opacity-100"
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-[#070708] transition-opacity duration-400 select-none pointer-events-none ${
+        fadingOut ? "opacity-0" : "opacity-100"
       }`}
     >
-      {/* 3D Particle Sphere + 3D Particle Text Canvas */}
+      {/* 3D Monochrome Volumetric Sphere + 3D Monochrome Particle Text */}
       <canvas
         ref={canvasRef}
-        className="w-full h-full absolute inset-0 pointer-events-none"
+        className="w-full h-full absolute inset-0 block"
       />
-
-      {/* Floating Info Pill under 3D Rotating Sphere */}
-      <div className="relative z-10 flex flex-col items-center gap-3.5 mt-[230px] px-6 text-center select-none pointer-events-none animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <div className="flex items-center gap-2 px-4 py-1.5 rounded-full border border-indigo-500/30 bg-indigo-950/60 shadow-[0_0_24px_rgba(99,102,241,0.25)] backdrop-blur-md">
-          <Sparkles className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-          <span className="text-xs font-semibold tracking-wider uppercase bg-gradient-to-r from-cyan-400 via-indigo-300 to-pink-400 bg-clip-text text-transparent">
-            {isReady ? "Matrix Assembled" : "Reconstructing 3D Particles"}
-          </span>
-          <span className="text-[11px] font-mono font-bold text-cyan-300 ml-1">
-            {displayPct}%
-          </span>
-        </div>
-
-        <p className="text-xs text-neutral-400 font-medium tracking-tight">
-          Streaming lossless 3D coordinates & depth layers
-        </p>
-
-        {/* Glowing Progress Track */}
-        <div className="w-48 h-1 rounded-full bg-neutral-900 overflow-hidden border border-white/10 shadow-inner">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-indigo-500 to-pink-500 transition-all duration-150 ease-out shadow-[0_0_12px_rgba(99,102,241,0.6)]"
-            style={{ width: `${Math.max(5, displayPct)}%` }}
-          />
-        </div>
-
-        <div className="text-[10px] text-neutral-500 font-mono tracking-widest uppercase">
-          {title}
-        </div>
-      </div>
     </div>
   );
 }

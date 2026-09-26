@@ -78,16 +78,12 @@ export function FaceParticlesApp() {
   });
   const [sharedLoader, setSharedLoader] = useState<{
     active: boolean;
-    progress: number;
     isReady: boolean;
-    title: string;
   } | null>(() => {
     if (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("share")) {
       return {
         active: true,
-        progress: 0.15,
         isReady: false,
-        title: "3D Particle Structure",
       };
     }
     return null;
@@ -293,9 +289,7 @@ export function FaceParticlesApp() {
       setIsSharedMode(true);
       setSharedLoader({
         active: true,
-        progress: 0.25,
         isReady: false,
-        title: "Locating 3D Particle Structure...",
       });
 
       void (async () => {
@@ -313,8 +307,6 @@ export function FaceParticlesApp() {
               try { data = JSON.parse(raw); } catch { /* ignore */ }
             }
           }
-
-          setSharedLoader((s) => (s ? { ...s, progress: 0.55, title: data?.title ?? "Loading 3D Particle Matrix..." } : null));
 
           // Zero-config URL fallback: if no DB response, reconstruct from inline URL params
           if (!data && studyId) {
@@ -340,7 +332,6 @@ export function FaceParticlesApp() {
             }
 
             if (data.particleData) {
-              setSharedLoader((s) => (s ? { ...s, progress: 0.85, title: "Unpacking 3D Points & Colors..." } : null));
               try {
                 const particleSet = await deserializeParticleSet(data.particleData);
                 const engine = engineRef.current;
@@ -380,49 +371,41 @@ export function FaceParticlesApp() {
                   setHero(false);
                 }
                 setSharedBanner(`Viewing 100% Lossless 3D Structure (${particleSet.count.toLocaleString()} particles)`);
-                setSharedLoader((s) => (s ? { ...s, progress: 1.0, isReady: true, title: "3D Portrait Assembled!" } : null));
+                setSharedLoader({ active: true, isReady: true });
               } catch (deserializeErr) {
                 console.warn("Failed to deserialize direct particleData, falling back:", deserializeErr);
                 if (data.studyId) {
                   const s = SAMPLES.find((x) => x.id === data.studyId);
                   if (s) {
                     setCurrentStudyId(s.id);
-                    await runSource(() => generateFromUrl(s.src, paramsRef.current, (b) => {
-                      if (b) setSharedLoader((s) => (s ? { ...s, progress: 0.7 + b.fraction * 0.3 } : null));
-                    }));
+                    await runSource(() => generateFromUrl(s.src, paramsRef.current, setBusy));
                   }
                 } else if (data.imageData) {
                   setCurrentStudyId(null);
-                  await runSource(() => generateFromUrl(data.imageData, paramsRef.current, (b) => {
-                    if (b) setSharedLoader((s) => (s ? { ...s, progress: 0.7 + b.fraction * 0.3 } : null));
-                  }));
+                  await runSource(() => generateFromUrl(data.imageData, paramsRef.current, setBusy));
                 }
                 setHasPortrait(true);
                 setHero(false);
                 setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
-                setSharedLoader((s) => (s ? { ...s, progress: 1.0, isReady: true } : null));
+                setSharedLoader({ active: true, isReady: true });
               }
             } else if (data.studyId) {
               const s = SAMPLES.find((x) => x.id === data.studyId);
               if (s) {
                 setCurrentStudyId(s.id);
-                await runSource(() => generateFromUrl(s.src, paramsRef.current, (b) => {
-                  if (b) setSharedLoader((s) => (s ? { ...s, progress: 0.5 + b.fraction * 0.5 } : null));
-                }));
+                await runSource(() => generateFromUrl(s.src, paramsRef.current, setBusy));
               }
               setHasPortrait(true);
               setHero(false);
               setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
-              setSharedLoader((s) => (s ? { ...s, progress: 1.0, isReady: true } : null));
+              setSharedLoader({ active: true, isReady: true });
             } else if (data.imageData) {
               setCurrentStudyId(null);
-              await runSource(() => generateFromUrl(data.imageData, paramsRef.current, (b) => {
-                if (b) setSharedLoader((s) => (s ? { ...s, progress: 0.5 + b.fraction * 0.5 } : null));
-              }));
+              await runSource(() => generateFromUrl(data.imageData, paramsRef.current, setBusy));
               setHasPortrait(true);
               setHero(false);
               setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
-              setSharedLoader((s) => (s ? { ...s, progress: 1.0, isReady: true } : null));
+              setSharedLoader({ active: true, isReady: true });
             }
 
             const engine = engineRef.current;
@@ -771,11 +754,11 @@ export function FaceParticlesApp() {
         </div>
       )}
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between px-4 pt-[max(0.75rem,env(safe-area-inset-top))]">
-        <div className="pointer-events-auto">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-1.5 px-3 sm:px-4 pt-[max(0.75rem,env(safe-area-inset-top))]">
+        <div className="pointer-events-auto shrink-0 mr-1">
           <p
             className={cn(
-              "font-display text-xl tracking-tight transition-colors",
+              "font-display text-lg sm:text-xl tracking-tight transition-colors",
               params.invert ? "text-neutral-900" : "text-fg",
             )}
           >
@@ -783,14 +766,14 @@ export function FaceParticlesApp() {
           </p>
           <p
             className={cn(
-              "text-[11px] uppercase tracking-[0.18em] transition-colors",
+              "text-[10px] sm:text-[11px] uppercase tracking-[0.18em] transition-colors",
               params.invert ? "text-neutral-600 font-semibold" : "text-fg-subtle",
             )}
           >
             {isSharedMode ? "Shared 3D" : "On-device"}
           </p>
         </div>
-        <div className="pointer-events-auto flex items-center gap-2">
+        <div className="pointer-events-auto flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar max-w-[calc(100vw-110px)] py-0.5 justify-end shrink">
           {isSharedMode && !hero && (
             <Button
               variant="outline"
@@ -799,11 +782,11 @@ export function FaceParticlesApp() {
                 setIsSharedMode(false);
                 setHero(true);
               }}
-              className="text-xs h-9 gap-1.5 border-indigo-500/40 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 shadow-sm"
+              className="h-8 sm:h-9 px-2 sm:px-2.5 text-xs gap-1 border-indigo-500/40 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 shadow-sm shrink-0"
               title="Create your own 3D particle portrait"
             >
-              <Upload className="size-3.5" />
-              <span>Make Mine</span>
+              <Upload className="size-3.5 sm:size-4" />
+              <span className="hidden sm:inline">Make Mine</span>
             </Button>
           )}
           {!hero && !isSharedMode && (
@@ -812,13 +795,14 @@ export function FaceParticlesApp() {
               size="icon"
               aria-label="New photo"
               onClick={() => setHero(true)}
-              className={
+              className={cn(
+                "size-8 sm:size-9 shrink-0",
                 params.invert
                   ? "border-neutral-300 bg-white/85 text-neutral-900 shadow-sm hover:bg-white backdrop-blur-md"
-                  : ""
-              }
+                  : "",
+              )}
             >
-              <ImagePlus className="size-5" />
+              <ImagePlus className="size-4 sm:size-5" />
             </Button>
           )}
           <Button
@@ -827,13 +811,14 @@ export function FaceParticlesApp() {
             aria-label="3D Typography"
             title="Sculpt 3D Typography Particles"
             onClick={() => setTextDialogOpen(true)}
-            className={
+            className={cn(
+              "size-8 sm:size-9 shrink-0",
               params.invert
                 ? "border-neutral-300 bg-white/85 text-neutral-900 shadow-sm hover:bg-white backdrop-blur-md"
-                : ""
-            }
+                : "",
+            )}
           >
-            <Type className="size-5" />
+            <Type className="size-4 sm:size-5" />
           </Button>
           <Button
             variant="secondary"
@@ -843,6 +828,7 @@ export function FaceParticlesApp() {
             disabled={!hasPortrait}
             onClick={toggleEraser}
             className={cn(
+              "size-8 sm:size-9 shrink-0",
               eraserActive
                 ? "bg-rose-500/25 text-rose-300 border-rose-500/50 shadow-md ring-1 ring-rose-500/40"
                 : params.invert
@@ -850,7 +836,7 @@ export function FaceParticlesApp() {
                   : "",
             )}
           >
-            <Eraser className="size-5" />
+            <Eraser className="size-4 sm:size-5" />
           </Button>
           <Button
             variant="secondary"
@@ -859,13 +845,14 @@ export function FaceParticlesApp() {
             title={params.invert ? "Export print-ready artwork (PNG)" : "Save still image (PNG)"}
             disabled={!hasPortrait}
             onClick={() => void onSaveStill()}
-            className={
+            className={cn(
+              "size-8 sm:size-9 shrink-0",
               params.invert
                 ? "border-neutral-300 bg-white/85 text-neutral-900 shadow-sm hover:bg-white backdrop-blur-md"
-                : ""
-            }
+                : "",
+            )}
           >
-            <Download className="size-5" />
+            <Download className="size-4 sm:size-5" />
           </Button>
           <Button
             variant="secondary"
@@ -874,13 +861,14 @@ export function FaceParticlesApp() {
             title="Open A4 Print & Vector Studio"
             disabled={!hasPortrait}
             onClick={() => setPrintDialogOpen(true)}
-            className={
+            className={cn(
+              "size-8 sm:size-9 shrink-0",
               params.invert
                 ? "border-neutral-300 bg-white/85 text-neutral-900 shadow-sm hover:bg-white backdrop-blur-md"
-                : ""
-            }
+                : "",
+            )}
           >
-            <Printer className="size-5" />
+            <Printer className="size-4 sm:size-5" />
           </Button>
           <Button
             variant="secondary"
@@ -890,12 +878,13 @@ export function FaceParticlesApp() {
             disabled={!hasPortrait}
             onClick={() => setShareDialogOpen(true)}
             className={cn(
+              "size-8 sm:size-9 shrink-0",
               params.invert
                 ? "border-neutral-300 bg-white/85 text-indigo-600 shadow-sm hover:bg-white backdrop-blur-md"
                 : "text-indigo-400 hover:text-indigo-300 border-indigo-500/30 bg-indigo-500/10",
             )}
           >
-            <Share2 className="size-5" />
+            <Share2 className="size-4 sm:size-5" />
           </Button>
           <Button
             variant="primary"
@@ -904,11 +893,12 @@ export function FaceParticlesApp() {
             title="Record Video (9:16 Status / Reels)"
             disabled={!hasPortrait || Boolean(recording)}
             onClick={() => setRecordDialogOpen(true)}
-            className={
-              params.invert ? "bg-neutral-900 text-white hover:bg-neutral-800 shadow-sm" : ""
-            }
+            className={cn(
+              "size-8 sm:size-9 shrink-0",
+              params.invert ? "bg-neutral-900 text-white hover:bg-neutral-800 shadow-sm" : "",
+            )}
           >
-            {recording ? <Loader2 className="size-5 animate-spin" /> : <Video className="size-5" />}
+            {recording ? <Loader2 className="size-4 sm:size-5 animate-spin" /> : <Video className="size-4 sm:size-5" />}
           </Button>
         </div>
       </header>
@@ -1864,12 +1854,10 @@ export function FaceParticlesApp() {
         </div>
       )}
 
-      {/* 3D Rotating Particle Sphere + 3D Colored Particle Percentage Text Loader */}
+      {/* 3D Monochrome Volumetric Particle Sphere + 3D Monochrome Percentage Text Loader */}
       {sharedLoader?.active && (
         <SharedParticleLoader
-          progress={sharedLoader.progress}
           isReady={sharedLoader.isReady}
-          title={sharedLoader.title}
           onFinish={() => setSharedLoader(null)}
         />
       )}
