@@ -95,12 +95,9 @@ export function FaceParticlesApp() {
   // Active Main Animation Setting (synced to video recording)
   const [activeAnimation, setActiveAnimation] = useState<"break" | "wind" | "ripple" | "fill" | "idle">("break");
 
-  // Share & Hold-to-Burst states
+  // Share states
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [currentStudyId, setCurrentStudyId] = useState<string | null>(null);
-  const [holdBurstProgress, setHoldBurstProgress] = useState(0);
-  const [holdBurstPos, setHoldBurstPos] = useState<[number, number] | null>(null);
-  const [burstToast, setBurstToast] = useState(false);
   const [sharedBanner, setSharedBanner] = useState<string | null>(null);
 
   useEffect(() => {
@@ -150,24 +147,6 @@ export function FaceParticlesApp() {
         setErasedCount(total);
         setCanUndo(engine?.canUndo() ?? false);
       });
-      engine.onHoldBurstProgress = (p, screenPos) => {
-        setHoldBurstProgress(p);
-        setHoldBurstPos(p > 0 ? screenPos : null);
-        if (p > 0 && typeof navigator !== "undefined" && navigator.vibrate) {
-          if (Math.random() < p * 0.35) {
-            navigator.vibrate(10);
-          }
-        }
-      };
-      engine.onHoldBurstTrigger = () => {
-        setHoldBurstProgress(0);
-        setHoldBurstPos(null);
-        if (typeof navigator !== "undefined" && navigator.vibrate) {
-          navigator.vibrate([60, 40, 120]);
-        }
-        setBurstToast(true);
-        window.setTimeout(() => setBurstToast(false), 2600);
-      };
       setGlOk(engine.supported);
       if (engine.supported) {
         engine.load(makeCloud(24000));
@@ -1741,59 +1720,6 @@ export function FaceParticlesApp() {
           zoom: engineRef.current?.getUserZoom() ?? 1.0,
         }}
       />
-
-      {/* Hold-to-Burst dynamic charge indicator */}
-      {holdBurstProgress > 0 && holdBurstPos && (
-        <div
-          className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center"
-          style={{ left: holdBurstPos[0], top: holdBurstPos[1] }}
-        >
-          <div className="relative flex items-center justify-center size-20">
-            <div
-              className="absolute inset-0 rounded-full bg-gradient-to-r from-amber-500/30 via-rose-500/30 to-purple-500/30 blur-md animate-pulse"
-              style={{ transform: `scale(${1 + holdBurstProgress * 0.8})` }}
-            />
-            <svg className="size-20 -rotate-90">
-              <circle
-                cx="40"
-                cy="40"
-                r="32"
-                stroke="currentColor"
-                strokeWidth="4"
-                fill="none"
-                className="text-white/20"
-              />
-              <circle
-                cx="40"
-                cy="40"
-                r="32"
-                stroke="currentColor"
-                strokeWidth="5"
-                fill="none"
-                strokeDasharray={201}
-                strokeDashoffset={201 * (1 - holdBurstProgress)}
-                strokeLinecap="round"
-                className="text-amber-400 transition-all duration-75"
-              />
-            </svg>
-            <span className="absolute text-[11px] font-bold text-white drop-shadow">
-              {Math.round(holdBurstProgress * 100)}%
-            </span>
-          </div>
-          <span className="mt-1 px-2.5 py-0.5 rounded-full bg-black/80 text-[11px] font-medium text-amber-300 backdrop-blur-md border border-amber-500/30 shadow-lg">
-            Holding to burst...
-          </span>
-        </div>
-      )}
-
-      {/* Burst notification toast */}
-      {burstToast && (
-        <div className="pointer-events-none fixed top-20 inset-x-0 z-50 flex justify-center animate-in zoom-in-95 duration-200">
-          <div className="px-4 py-2 rounded-full bg-gradient-to-r from-amber-600 via-rose-600 to-purple-600 text-white font-semibold text-sm shadow-2xl flex items-center gap-2 border border-white/20">
-            <span>💥 3D Structure Burst!</span>
-          </div>
-        </div>
-      )}
 
       {/* Shared structure loaded banner */}
       {sharedBanner && (

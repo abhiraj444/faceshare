@@ -104,28 +104,15 @@ void main() {
     float forceFalloff = 1.0 / (dist + 0.35);
     f += (dir * 1.6 + chaoticSpur * 3.2) * uEffectAmp * forceFalloff * (0.6 + aSeed * 0.8);
   }
-  // Mode 6: Hold Shake & Explosive Burst
+  // Mode 6: Smooth Explosive Burst
   else if (uMode > 5.5 && uMode < 6.5) {
-    if (uEffectT < 1.0) {
-      // Phase 1: High-frequency kinetic tremble / pre-burst shaking
-      float charge = clamp(uEffectT, 0.0, 1.0);
-      float shakeAmp = pow(charge, 1.8) * uEffectAmp * 18.0;
-      vec3 shake = vec3(
-        sin(uTime * 64.0 + aSeed * 37.0),
-        cos(uTime * 56.0 + aSeed * 29.0),
-        sin(uTime * 72.0 + aSeed * 43.0)
-      ) * shakeAmp;
-      f += shake;
-    } else {
-      // Phase 2: Explosive shockwave blast radiating outward from hold origin
-      float burstAge = uEffectT - 1.0;
-      vec3 d = aPos - vec3(uEffectOrigin, 0.0);
-      float dist = length(d);
-      vec3 dir = dist > 1e-4 ? d / dist : vec3(sin(aSeed * 6.28), cos(aSeed * 6.28), 0.5);
-      float blastPower = exp(-burstAge * 2.8) * uEffectAmp * 32.0;
-      vec3 chaoticDebris = fastTurbulence(aPos * 2.5, uTime * 4.0 + aSeed * 18.0) * 16.0;
-      f += (dir * blastPower + chaoticDebris * (blastPower * 0.45));
-    }
+    float burstAge = max(0.0, uEffectT);
+    vec3 d = aPos - vec3(uEffectOrigin, 0.0);
+    float dist = length(d);
+    vec3 dir = dist > 1e-4 ? d / dist : vec3(sin(aSeed * 6.28), cos(aSeed * 6.28), 0.5);
+    float blastPower = exp(-burstAge * 2.5) * uEffectAmp * 28.0;
+    vec3 fluidSwirl = fastTurbulence(aPos * 2.2, uTime * 3.2 + aSeed * 18.0) * (blastPower * 0.4);
+    f += (dir * blastPower + fluidSwirl);
   }
 
   vVel = (aVel + f * uDt) * exp(-uDamp * uDt);

@@ -418,38 +418,22 @@ export class ParticleEngine {
     this.userZoom = clamp(z, 0.6, 2.5);
   }
 
-  setHoldBurstProgress(p: number, origin?: [number, number]): void {
-    if (p <= 0) {
-      if (this.holdBurstCharging && this.mode === 6 && this.effectT < 1.0) {
-        this.mode = 0;
-        this.effectAmp = 0;
-        this.holdBurstCharging = false;
-        this.holdBurstProgress = 0;
-        this.onHoldBurstProgress?.(0, this.holdOrigin);
-      }
-      return;
-    }
-    this.holdBurstCharging = true;
-    this.holdBurstProgress = clamp(p, 0, 1);
-    this.mode = 6;
-    this.effectAmp = 1.0;
-    this.effectT = this.holdBurstProgress; // 0..1 = pre-burst kinetic shake
-    if (origin) this.effectOrigin = origin;
-    this.onHoldBurstProgress?.(this.holdBurstProgress, this.holdOrigin);
+  setHoldBurstProgress(_p: number, _origin?: [number, number]): void {
+    // Deprecated: No warning signals or charge symbols shown to user
   }
 
   triggerBurst(origin?: [number, number]): void {
     this.mode = 6;
     this.effectOrigin = origin ?? [0, 0];
     this.effectAmp = 1.0;
-    this.effectT = 1.0; // >= 1.0 triggers explosive shockwave blast
+    this.effectT = 0;
     this.effectTimer = 0;
-    this.spring = 0.8;
-    this.damp = 1.1;
-    this.turb = 1.8;
+    this.spring = 0.7;
+    this.damp = 1.15;
+    this.turb = 1.1;
+    this.holdActive = false;
     this.holdBurstCharging = false;
     this.holdBurstProgress = 0;
-    this.onHoldBurstProgress?.(0, this.holdOrigin);
     this.setState("bursting");
     this.onHoldBurstTrigger?.(this.holdOrigin);
   }
@@ -747,34 +731,27 @@ export class ParticleEngine {
     this.effectTimer += dt;
     this.assemble += (this.targetAssemble - this.assemble) * Math.min(1, dt * 1.35);
 
-    // Hold-to-Burst: holding finger/mouse continuously charges kinetic shaking and bursts at ~3 seconds
+    // Hold-to-Burst: pressing and holding on the 3D structure for 3s bursts smoothly without warning signals
     if (this.holdActive && !this.holdMoved && this.pointers.size === 1 && !this.eraserActive && this.state !== "bursting") {
       const elapsed = (performance.now() - this.holdStartTime) / 1000;
-      if (elapsed > 0.35) {
-        // Charging shake phase: 0.35s to 3.0s (ramp 0..1)
-        const progress = Math.min(1.0, (elapsed - 0.35) / 2.65);
+      if (elapsed >= 3.0) {
+        this.holdActive = false;
         const [wx, wy] = this.worldFromClient(this.holdOrigin[0], this.holdOrigin[1]);
-        this.setHoldBurstProgress(progress, [wx, wy]);
-        if (progress >= 1.0) {
-          this.holdActive = false;
-          this.triggerBurst([wx, wy]);
-        }
+        this.triggerBurst([wx, wy]);
       }
-    } else if (this.holdBurstCharging && this.state !== "bursting") {
-      this.setHoldBurstProgress(0);
     }
 
     if (this.state === "bursting") {
       this.effectTimer += dt;
-      this.effectT = 1.0 + this.effectTimer;
-      if (this.effectTimer > 2.6) {
+      this.effectT = this.effectTimer;
+      if (this.effectTimer > 3.0) {
         // Gracefully reconstruct back into assembled portrait
         this.mode = 0;
         this.effectAmp = 0;
         this.targetAssemble = 1;
-        this.spring = 16;
-        this.damp = 3.4;
-        this.turb = 0.22;
+        this.spring = 15;
+        this.damp = 3.3;
+        this.turb = 0.2;
         this.setState("assembling");
       }
     }
