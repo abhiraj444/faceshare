@@ -28,7 +28,7 @@ void main() {
   vec3 f = vec3(0.0);
 
   // Mode 5: Celestial Fill / Stream (Cascade down and settle layer-by-layer)
-  if (uMode > 4.5) {
+  if (uMode > 4.5 && uMode < 5.5) {
     float stagger = aSeed * 0.28;
     float reach = smoothstep(uEffectT - 0.16 + stagger, uEffectT + 0.10 + stagger, aHome.y);
     vec3 springForce = (aHome - aPos) * (uSpring * 1.85);
@@ -40,6 +40,18 @@ void main() {
       streamZ
     );
     f += mix(streamForce, springForce, reach);
+  } else if (uMode > 5.5 && uMode < 6.5) {
+    if (uEffectT < 1.0) {
+      // Spring keeps structure intact while vibrating
+      f += (aHome - aPos) * uSpring;
+    } else {
+      // Burst reassembly: As explosive blast decays, draw particles smoothly from all surrounding 3D space back to home
+      float burstAge = uEffectT - 1.0;
+      float returnFactor = smoothstep(0.25, 2.2, burstAge);
+      float perParticleDelay = smoothstep(aSeed * 0.35, aSeed * 0.35 + 0.65, returnFactor);
+      vec3 springForce = (aHome - aPos) * (uSpring * (0.15 + 1.25 * perParticleDelay));
+      f += springForce;
+    }
   } else {
     // Standard harmonic spring with per-particle emergence
     float k = smoothstep(aSeed * 0.45, aSeed * 0.45 + 0.55, uAssemble);
@@ -117,13 +129,18 @@ void main() {
       ) * vibrateAmp;
       f += vibration;
     } else {
-      // Burst Phase: Explosive radiant outward expansion
+      // Burst Phase: Explosive radiant outward expansion in full 3D sphere all around
       float burstAge = uEffectT - 1.0;
       vec3 d = aPos - vec3(uEffectOrigin, 0.0);
       float dist = length(d);
-      vec3 dir = dist > 1e-4 ? d / dist : vec3(sin(aSeed * 6.28), cos(aSeed * 6.28), 0.5);
-      float blastPower = exp(-burstAge * 2.6) * uEffectAmp * 30.0;
-      vec3 fluidSwirl = fastTurbulence(aPos * 2.2, uTime * 3.2 + aSeed * 18.0) * (blastPower * 0.42);
+      
+      float theta = aSeed * 6.2831853;
+      float phi = (fract(aSeed * 137.5) - 0.5) * 3.14159;
+      vec3 randomSphereDir = vec3(cos(theta) * cos(phi), sin(phi), sin(theta) * cos(phi));
+      vec3 dir = dist > 1e-3 ? normalize(d) : randomSphereDir;
+      
+      float blastPower = exp(-burstAge * 2.2) * uEffectAmp * 34.0;
+      vec3 fluidSwirl = fastTurbulence(aPos * 2.0, uTime * 2.6 + aSeed * 22.0) * (blastPower * 0.4);
       f += (dir * blastPower + fluidSwirl);
     }
   }

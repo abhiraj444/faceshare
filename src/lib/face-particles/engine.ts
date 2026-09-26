@@ -428,9 +428,9 @@ export class ParticleEngine {
     this.effectAmp = 1.0;
     this.effectT = 1.0; // >= 1.0 triggers explosive shockwave burst
     this.effectTimer = 0;
-    this.spring = 0.7;
-    this.damp = 1.15;
-    this.turb = 1.1;
+    this.spring = 11;
+    this.damp = 2.4;
+    this.turb = 0.45;
     this.holdActive = false;
     this.setState("bursting");
     if (typeof navigator !== "undefined" && navigator.vibrate) {
