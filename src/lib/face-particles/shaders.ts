@@ -104,15 +104,28 @@ void main() {
     float forceFalloff = 1.0 / (dist + 0.35);
     f += (dir * 1.6 + chaoticSpur * 3.2) * uEffectAmp * forceFalloff * (0.6 + aSeed * 0.8);
   }
-  // Mode 6: Smooth Explosive Burst
+  // Mode 6: Hold Vibration & Smooth Explosive Burst
   else if (uMode > 5.5 && uMode < 6.5) {
-    float burstAge = max(0.0, uEffectT);
-    vec3 d = aPos - vec3(uEffectOrigin, 0.0);
-    float dist = length(d);
-    vec3 dir = dist > 1e-4 ? d / dist : vec3(sin(aSeed * 6.28), cos(aSeed * 6.28), 0.5);
-    float blastPower = exp(-burstAge * 2.5) * uEffectAmp * 28.0;
-    vec3 fluidSwirl = fastTurbulence(aPos * 2.2, uTime * 3.2 + aSeed * 18.0) * (blastPower * 0.4);
-    f += (dir * blastPower + fluidSwirl);
+    if (uEffectT < 1.0) {
+      // Vibration Phase: Physical kinetic micro-vibrations building organically over 3s
+      float charge = clamp(uEffectT, 0.0, 1.0);
+      float vibrateAmp = pow(charge, 1.6) * uEffectAmp * 15.0;
+      vec3 vibration = vec3(
+        sin(uTime * 68.0 + aSeed * 37.0),
+        cos(uTime * 60.0 + aSeed * 29.0),
+        sin(uTime * 76.0 + aSeed * 43.0)
+      ) * vibrateAmp;
+      f += vibration;
+    } else {
+      // Burst Phase: Explosive radiant outward expansion
+      float burstAge = uEffectT - 1.0;
+      vec3 d = aPos - vec3(uEffectOrigin, 0.0);
+      float dist = length(d);
+      vec3 dir = dist > 1e-4 ? d / dist : vec3(sin(aSeed * 6.28), cos(aSeed * 6.28), 0.5);
+      float blastPower = exp(-burstAge * 2.6) * uEffectAmp * 30.0;
+      vec3 fluidSwirl = fastTurbulence(aPos * 2.2, uTime * 3.2 + aSeed * 18.0) * (blastPower * 0.42);
+      f += (dir * blastPower + fluidSwirl);
+    }
   }
 
   vVel = (aVel + f * uDt) * exp(-uDamp * uDt);

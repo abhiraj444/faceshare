@@ -426,16 +426,16 @@ export class ParticleEngine {
     this.mode = 6;
     this.effectOrigin = origin ?? [0, 0];
     this.effectAmp = 1.0;
-    this.effectT = 0;
+    this.effectT = 1.0; // >= 1.0 triggers explosive shockwave burst
     this.effectTimer = 0;
     this.spring = 0.7;
     this.damp = 1.15;
     this.turb = 1.1;
     this.holdActive = false;
-    this.holdBurstCharging = false;
-    this.holdBurstProgress = 0;
     this.setState("bursting");
-    this.onHoldBurstTrigger?.(this.holdOrigin);
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      navigator.vibrate([40, 30, 80]);
+    }
   }
 
   updateHomeZ(set: ParticleSet): void {
@@ -731,19 +731,35 @@ export class ParticleEngine {
     this.effectTimer += dt;
     this.assemble += (this.targetAssemble - this.assemble) * Math.min(1, dt * 1.35);
 
-    // Hold-to-Burst: pressing and holding on the 3D structure for 3s bursts smoothly without warning signals
+    // Hold-to-Burst: pressing and holding on the 3D structure triggers physical particle vibration over 3s, then smoothly bursts
     if (this.holdActive && !this.holdMoved && this.pointers.size === 1 && !this.eraserActive && this.state !== "bursting") {
       const elapsed = (performance.now() - this.holdStartTime) / 1000;
-      if (elapsed >= 3.0) {
-        this.holdActive = false;
+      if (elapsed > 0.12) {
+        const progress = Math.min(1.0, elapsed / 3.0);
+        this.mode = 6;
+        this.effectAmp = 1.0;
+        this.effectT = progress; // 0..1 = physical vibration phase in shader
         const [wx, wy] = this.worldFromClient(this.holdOrigin[0], this.holdOrigin[1]);
-        this.triggerBurst([wx, wy]);
+        this.effectOrigin = [wx, wy];
+
+        if (typeof navigator !== "undefined" && navigator.vibrate && Math.random() < progress * 0.35) {
+          navigator.vibrate(8 + Math.floor(progress * 12));
+        }
+
+        if (elapsed >= 3.0) {
+          this.holdActive = false;
+          this.triggerBurst([wx, wy]);
+        }
       }
+    } else if (this.mode === 6 && this.state !== "bursting") {
+      this.mode = 0;
+      this.effectAmp = 0;
+      this.effectT = 0;
     }
 
     if (this.state === "bursting") {
       this.effectTimer += dt;
-      this.effectT = this.effectTimer;
+      this.effectT = 1.0 + this.effectTimer;
       if (this.effectTimer > 3.0) {
         // Gracefully reconstruct back into assembled portrait
         this.mode = 0;
@@ -1152,7 +1168,12 @@ export class ParticleEngine {
       const dist = Math.hypot(e.clientX - this.holdOrigin[0], e.clientY - this.holdOrigin[1]);
       if (dist > 18) {
         this.holdMoved = true;
-        this.setHoldBurstProgress(0);
+        this.holdActive = false;
+        if (this.mode === 6 && this.state !== "bursting") {
+          this.mode = 0;
+          this.effectAmp = 0;
+          this.effectT = 0;
+        }
       }
     }
 
@@ -1199,8 +1220,10 @@ export class ParticleEngine {
     this.pointers.delete(e.pointerId);
     this.pointers.delete(-2);
     this.holdActive = false;
-    if (this.holdBurstCharging && this.state !== "bursting") {
-      this.setHoldBurstProgress(0);
+    if (this.mode === 6 && this.state !== "bursting") {
+      this.mode = 0;
+      this.effectAmp = 0;
+      this.effectT = 0;
     }
     if (this.pointers.size < 2) {
       this.lastPinchDist = 0;
