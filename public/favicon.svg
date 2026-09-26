@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-label="Face Particles">
+  <rect width="16" height="16" rx="3" fill="#070708"/>
+  <g fill="#d4cfc4">
+    <circle cx="8" cy="2" r="1.1"/>
+    <circle cx="4" cy="4" r="1.05"/>
+    <circle cx="12" cy="4" r="1.05"/>
+    <circle cx="2" cy="7" r="1.05"/>
+    <circle cx="14" cy="7" r="1.05"/>
+    <circle cx="3" cy="10" r="1.05"/>
+    <circle cx="13" cy="10" r="1.05"/>
+    <circle cx="5" cy="13" r="1.05"/>
+    <circle cx="11" cy="13" r="1.05"/>
+    <circle cx="8" cy="14" r="1.05"/>
+  </g>
+  <g fill="#f2f0ec">
+    <circle cx="6" cy="7" r="1.25"/>
+    <circle cx="10" cy="7" r="1.25"/>
+    <circle cx="8" cy="9" r="0.95"/>
+    <circle cx="6" cy="11" r="0.85"/>
+    <circle cx="8" cy="12" r="0.85"/>
+    <circle cx="10" cy="11" r="0.85"/>
+  </g>
+</svg>

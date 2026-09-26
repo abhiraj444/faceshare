@@ -1,0 +1,14 @@
+node_modules/
+.vercel/
+.output/
+.nitro/
+dist/
+screenshots/
+.grok/preview.pid
+.grok/preview.log
+.project_id
+.github_repo
+.env
+.env.*
+.DS_Store
+Thumbs.db

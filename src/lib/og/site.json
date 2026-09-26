@@ -1,0 +1,5 @@
+{
+  "type": "x:game",
+  "card": "custom",
+  "description": "Turn a portrait into an interactive living 3D cloud of particles using on-device vision and WebGL."
+}

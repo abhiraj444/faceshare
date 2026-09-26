@@ -1,0 +1,10 @@
+{
+  "name": "Face Particles 3D",
+  "description": "Turn a portrait into an interactive living 3D cloud of particles using on-device vision and WebGL.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
