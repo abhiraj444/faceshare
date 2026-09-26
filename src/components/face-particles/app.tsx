@@ -46,6 +46,7 @@ import { RecordDialog } from "@/components/face-particles/record-dialog";
 import { PrintDialog } from "@/components/face-particles/print-dialog";
 import { TextDialog } from "@/components/face-particles/text-dialog";
 import { ShareDialog } from "@/components/face-particles/share-dialog";
+import { SharedParticleLoader } from "@/components/face-particles/shared-particle-loader";
 import { getSharedPortrait } from "@/lib/server-share";
 import { deserializeParticleSet } from "@/lib/face-particles/serialize";
 import type { AnimState, EffectName, Params } from "@/lib/face-particles/types";
@@ -62,7 +63,35 @@ export function FaceParticlesApp() {
   const rebuildTimer = useRef<number>(0);
 
   const [params, setParams] = useState<Params>(() => paramsRef.current);
-  const [hero, setHero] = useState(true);
+  const [hero, setHero] = useState(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      if (p.has("share") || p.has("study")) return false;
+    }
+    return true;
+  });
+  const [isSharedMode, setIsSharedMode] = useState(() => {
+    if (typeof window !== "undefined") {
+      return Boolean(new URLSearchParams(window.location.search).get("share"));
+    }
+    return false;
+  });
+  const [sharedLoader, setSharedLoader] = useState<{
+    active: boolean;
+    progress: number;
+    isReady: boolean;
+    title: string;
+  } | null>(() => {
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("share")) {
+      return {
+        active: true,
+        progress: 0.15,
+        isReady: false,
+        title: "3D Particle Structure",
+      };
+    }
+    return null;
+  });
   const [sheet, setSheet] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [activeTab, setActiveTab] = useState<"style" | "depth" | "sensors">("style");
@@ -260,8 +289,16 @@ export function FaceParticlesApp() {
     const studyId = urlParams.get("study");
 
     if (shareId) {
+      setHero(false);
+      setIsSharedMode(true);
+      setSharedLoader({
+        active: true,
+        progress: 0.25,
+        isReady: false,
+        title: "Locating 3D Particle Structure...",
+      });
+
       void (async () => {
-        setBusy({ stage: "Loading shared 3D structure", fraction: 0.1 });
         try {
           let data: any = null;
           try {
@@ -276,6 +313,8 @@ export function FaceParticlesApp() {
               try { data = JSON.parse(raw); } catch { /* ignore */ }
             }
           }
+
+          setSharedLoader((s) => (s ? { ...s, progress: 0.55, title: data?.title ?? "Loading 3D Particle Matrix..." } : null));
 
           // Zero-config URL fallback: if no DB response, reconstruct from inline URL params
           if (!data && studyId) {
@@ -294,13 +333,14 @@ export function FaceParticlesApp() {
           }
 
           if (data) {
+            setHero(false);
             if (data.params) {
               setParams((p) => ({ ...p, ...data.params }));
               paramsRef.current = { ...paramsRef.current, ...data.params };
             }
 
             if (data.particleData) {
-              setBusy({ stage: "Loading 100% lossless 3D structure", fraction: 0.8 });
+              setSharedLoader((s) => (s ? { ...s, progress: 0.85, title: "Unpacking 3D Points & Colors..." } : null));
               try {
                 const particleSet = await deserializeParticleSet(data.particleData);
                 const engine = engineRef.current;
@@ -336,33 +376,53 @@ export function FaceParticlesApp() {
                     set: particleSet,
                   };
                   setCurrentStudyId(data.studyId ?? null);
+                  setHasPortrait(true);
+                  setHero(false);
                 }
                 setSharedBanner(`Viewing 100% Lossless 3D Structure (${particleSet.count.toLocaleString()} particles)`);
+                setSharedLoader((s) => (s ? { ...s, progress: 1.0, isReady: true, title: "3D Portrait Assembled!" } : null));
               } catch (deserializeErr) {
                 console.warn("Failed to deserialize direct particleData, falling back:", deserializeErr);
                 if (data.studyId) {
                   const s = SAMPLES.find((x) => x.id === data.studyId);
                   if (s) {
                     setCurrentStudyId(s.id);
-                    await runSource(() => generateFromUrl(s.src, paramsRef.current, setBusy));
+                    await runSource(() => generateFromUrl(s.src, paramsRef.current, (b) => {
+                      if (b) setSharedLoader((s) => (s ? { ...s, progress: 0.7 + b.fraction * 0.3 } : null));
+                    }));
                   }
                 } else if (data.imageData) {
                   setCurrentStudyId(null);
-                  await runSource(() => generateFromUrl(data.imageData, paramsRef.current, setBusy));
+                  await runSource(() => generateFromUrl(data.imageData, paramsRef.current, (b) => {
+                    if (b) setSharedLoader((s) => (s ? { ...s, progress: 0.7 + b.fraction * 0.3 } : null));
+                  }));
                 }
+                setHasPortrait(true);
+                setHero(false);
                 setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
+                setSharedLoader((s) => (s ? { ...s, progress: 1.0, isReady: true } : null));
               }
             } else if (data.studyId) {
               const s = SAMPLES.find((x) => x.id === data.studyId);
               if (s) {
                 setCurrentStudyId(s.id);
-                await runSource(() => generateFromUrl(s.src, paramsRef.current, setBusy));
+                await runSource(() => generateFromUrl(s.src, paramsRef.current, (b) => {
+                  if (b) setSharedLoader((s) => (s ? { ...s, progress: 0.5 + b.fraction * 0.5 } : null));
+                }));
               }
+              setHasPortrait(true);
+              setHero(false);
               setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
+              setSharedLoader((s) => (s ? { ...s, progress: 1.0, isReady: true } : null));
             } else if (data.imageData) {
               setCurrentStudyId(null);
-              await runSource(() => generateFromUrl(data.imageData, paramsRef.current, setBusy));
+              await runSource(() => generateFromUrl(data.imageData, paramsRef.current, (b) => {
+                if (b) setSharedLoader((s) => (s ? { ...s, progress: 0.5 + b.fraction * 0.5 } : null));
+              }));
+              setHasPortrait(true);
+              setHero(false);
               setSharedBanner(`Viewing shared structure: ${data.title ?? "3D Portrait"}`);
+              setSharedLoader((s) => (s ? { ...s, progress: 1.0, isReady: true } : null));
             }
 
             const engine = engineRef.current;
@@ -376,6 +436,7 @@ export function FaceParticlesApp() {
           }
         } catch (e) {
           console.error("Failed to load shared portrait:", e);
+          setSharedLoader(null);
         } finally {
           setBusy(null);
         }
@@ -726,11 +787,26 @@ export function FaceParticlesApp() {
               params.invert ? "text-neutral-600 font-semibold" : "text-fg-subtle",
             )}
           >
-            On-device
+            {isSharedMode ? "Shared 3D" : "On-device"}
           </p>
         </div>
-        <div className="pointer-events-auto flex gap-2">
-          {!hero && (
+        <div className="pointer-events-auto flex items-center gap-2">
+          {isSharedMode && !hero && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setIsSharedMode(false);
+                setHero(true);
+              }}
+              className="text-xs h-9 gap-1.5 border-indigo-500/40 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 shadow-sm"
+              title="Create your own 3D particle portrait"
+            >
+              <Upload className="size-3.5" />
+              <span>Make Mine</span>
+            </Button>
+          )}
+          {!hero && !isSharedMode && (
             <Button
               variant="secondary"
               size="icon"
@@ -1786,6 +1862,16 @@ export function FaceParticlesApp() {
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 ml-2">Interactive 3D</span>
           </div>
         </div>
+      )}
+
+      {/* 3D Rotating Particle Sphere + 3D Colored Particle Percentage Text Loader */}
+      {sharedLoader?.active && (
+        <SharedParticleLoader
+          progress={sharedLoader.progress}
+          isReady={sharedLoader.isReady}
+          title={sharedLoader.title}
+          onFinish={() => setSharedLoader(null)}
+        />
       )}
     </main>
   );
