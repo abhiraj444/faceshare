@@ -101,7 +101,6 @@ export async function generateFromCanvas(
   params: Params,
   onProgress?: (p: PipelineProgress) => void,
 ): Promise<PipelineCache> {
-  // Phase 1: Preprocessing & Primary Background Cleaning Pipeline
   onProgress?.({ stage: "Cleaning background & isolating subject", fraction: 0.1 });
   const { canvas: img, bgCleanResult } = preprocessImage(rawImg, {
     denoise: true,

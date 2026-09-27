@@ -91,19 +91,17 @@ export function preprocessImage(
   const data = imgData.data;
   const nPixels = w * h;
 
-  // 3. Exposure & Contrast Analysis (Auto-Levels Histogram Stretch)
-  // Skip aggressive histogram stretching if already converted to clean dark-void graphic
+  // 3. For documents/graphics (signatures, line art, sketches on paper),
+  // apply high-contrast ink isolation so drawings pop on black gallery void.
   const isDarkGraphic = bgCleanResult?.isDocumentOrGraphic && bgCleanResult.isLightBg;
-  if (opts.normalizeExposure && nPixels > 100 && !isDarkGraphic) {
+  if (isDarkGraphic && opts.normalizeExposure && nPixels > 100) {
     const hist = new Uint32Array(256);
-    // Sample luminance across pixels
     for (let i = 0; i < nPixels; i++) {
       const p = i * 4;
       const lum = (data[p]! * 77 + data[p + 1]! * 150 + data[p + 2]! * 29) >> 8;
       hist[lum]++;
     }
 
-    // Determine 1st and 99th percentiles
     const p1Count = Math.floor(nPixels * 0.015);
     const p99Count = Math.floor(nPixels * 0.985);
     let accum = 0;
@@ -122,17 +120,12 @@ export function preprocessImage(
     }
 
     const lumRange = maxLum - minLum;
-    // Only stretch if there is genuine compression or clipping
     if (lumRange > 30 && (minLum > 10 || maxLum < 240)) {
       const scale = 255 / lumRange;
       const lut = new Uint8Array(256);
       for (let v = 0; v < 256; v++) {
-        const stretched = (v - minLum) * scale;
-        // Mild S-curve contrast stabilization
-        const norm = clamp(stretched / 255, 0, 1);
-        const curved = norm < 0.5 ? 2 * norm * norm : 1 - 2 * (1 - norm) * (1 - norm);
-        const blended = norm * 0.65 + curved * 0.35;
-        lut[v] = Math.round(blended * 255);
+        const norm = clamp((v - minLum) * scale / 255, 0, 1);
+        lut[v] = Math.round(norm * 255);
       }
 
       for (let i = 0; i < nPixels; i++) {
@@ -141,21 +134,13 @@ export function preprocessImage(
         data[p + 1] = lut[data[p + 1]!]!;
         data[p + 2] = lut[data[p + 2]!]!;
       }
+      ctx.putImageData(imgData, 0, 0);
     }
   }
 
-  // 3. Bilateral Edge-Preserving Spatial Denoising (Skin noise reduction)
-  if (opts.denoise && nPixels > 100) {
-    applyFastBilateralRGB(data, w, h, 1.8, 22);
-  }
-
-  // 4. Subtle Unsharp Mask if it was upscaled
-  if (wasUpscaled) {
-    applyUnsharpMaskRGB(data, w, h, 0.45);
-  }
-
-  ctx.putImageData(imgData, 0, 0);
-  return { canvas: currentCanvas, applied: true };
+  // Authentic photos: NEVER mutate RGB colors or apply lossy bilateral blur.
+  // 100% of original camera tones, skin colors, and fine facial features are preserved.
+  return { canvas: currentCanvas, applied: wasUpscaled, bgCleanResult };
 }
 
 /**
@@ -163,7 +148,7 @@ export function preprocessImage(
  * Smooths high-frequency sensor grain in smooth regions (forehead, cheeks)
  * while preserving sharp edges (eyelashes, pupil, lip line) in <15ms.
  */
-function applyFastBilateralRGB(
+function _applyFastBilateralRGB(
   data: Uint8ClampedArray,
   w: number,
   h: number,
@@ -248,7 +233,7 @@ function applyFastBilateralRGB(
 /**
  * Lightweight Unsharp Mask filter for subtle edge crispness after scaling.
  */
-function applyUnsharpMaskRGB(
+function _applyUnsharpMaskRGB(
   data: Uint8ClampedArray,
   w: number,
   h: number,

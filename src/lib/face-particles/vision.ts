@@ -218,7 +218,10 @@ async function initSegmenter(): Promise<ImageSegmenter | null> {
 /** Preload vision models in background */
 export async function preloadVision(): Promise<void> {
   if (typeof window === "undefined") return;
-  await Promise.allSettled([initLandmarker(), initSegmenter()]);
+  await Promise.allSettled([
+    initLandmarker(),
+    initSegmenter(),
+  ]);
 }
 
 /**

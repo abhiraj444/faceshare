@@ -257,12 +257,10 @@ export function headCrop(
     }
   }
 
-  // Replace background on the crop canvas with obsidian gallery void (#050506)
   if (params.removeBg) {
     const px = imageData.data;
     for (let i = 0; i < outW * outH; i++) {
-      const m = mask[i]!;
-      if (m < 0.05) {
+      if (mask[i]! < 0.05) {
         const p = i * 4;
         px[p] = 5;
         px[p + 1] = 5;
