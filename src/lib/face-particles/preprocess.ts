@@ -17,10 +17,152 @@ const DEFAULT_OPTIONS: Required<PreprocessOptions> = {
   cleanBackground: true,
 };
 
-export interface PreprocessResult {
-  canvas: HTMLCanvasElement;
-  applied: boolean;
-  bgCleanResult?: BackgroundCleanResult;
+export interface ToneOpts {
+  clipLimit?: number;
+  tiles?: number;
+  lift?: number; // 0..1 UI slider
+}
+
+/**
+ * Adaptive CLAHE Tone Normalization (Phase 1.1):
+ * - Evaluates mean face luma (meanL) inside faceMask
+ * - Automatically computes adaptive lift strength s = clamp((0.42 - meanL)/0.22, 0, 1) * lift
+ * - Applies 8x8 tiled CLAHE with bilinear CDF interpolation
+ * - Preserves exact R:G:B ratios and soft-clips highlights
+ */
+export function normalizeTone(
+  img: ImageData,
+  faceMask?: Float32Array,
+  options?: ToneOpts,
+): ImageData {
+  const opts = { clipLimit: 2.0, tiles: 8, lift: 1.0, ...options };
+  const { width: w, height: h, data } = img;
+  const nPix = w * h;
+  const luma = new Float32Array(nPix);
+
+  let meanL = 0;
+  let maskCount = 0;
+
+  for (let i = 0; i < nPix; i++) {
+    const p = i * 4;
+    // Rec. 709 luma
+    const yVal = (0.2126 * data[p]! + 0.7152 * data[p + 1]! + 0.0722 * data[p + 2]!) / 255;
+    luma[i] = yVal;
+
+    const m = faceMask ? (faceMask[i] ?? 0) : 1;
+    if (m > 0.5) {
+      meanL += yVal * m;
+      maskCount += m;
+    }
+  }
+
+  if (maskCount > 0) {
+    meanL /= maskCount;
+  } else {
+    meanL = 0.35;
+  }
+
+  // Auto strength s = clamp((0.42 - meanL) / 0.22, 0, 1) * lift
+  const strength = clamp((0.42 - meanL) / 0.22, 0, 1) * (opts.lift ?? 1.0);
+  if (strength < 0.05) {
+    return img;
+  }
+
+  // 8x8 Grid CLAHE
+  const numTilesX = opts.tiles;
+  const numTilesY = opts.tiles;
+  const tileW = w / numTilesX;
+  const tileH = h / numTilesY;
+
+  // Compute tile CDFs
+  const cdfs = new Array(numTilesY);
+  for (let ty = 0; ty < numTilesY; ty++) {
+    cdfs[ty] = new Array(numTilesX);
+    for (let tx = 0; tx < numTilesX; tx++) {
+      const hist = new Uint32Array(256);
+      const startX = Math.floor(tx * tileW);
+      const endX = Math.min(w, Math.floor((tx + 1) * tileW));
+      const startY = Math.floor(ty * tileH);
+      const endY = Math.min(h, Math.floor((ty + 1) * tileH));
+      const tilePix = (endX - startX) * (endY - startY);
+
+      for (let y = startY; y < endY; y++) {
+        const row = y * w;
+        for (let x = startX; x < endX; x++) {
+          const bin = clamp(Math.round(luma[row + x]! * 255), 0, 255);
+          hist[bin]++;
+        }
+      }
+
+      // Clip and redistribute
+      const clipVal = Math.max(1, Math.round((opts.clipLimit * tilePix) / 256));
+      let excess = 0;
+      for (let b = 0; b < 256; b++) {
+        if (hist[b]! > clipVal) {
+          excess += hist[b]! - clipVal;
+          hist[b] = clipVal;
+        }
+      }
+      const redist = Math.floor(excess / 256);
+      for (let b = 0; b < 256; b++) {
+        hist[b] += redist;
+      }
+
+      // CDF
+      const cdf = new Float32Array(256);
+      let accum = 0;
+      for (let b = 0; b < 256; b++) {
+        accum += hist[b]!;
+        cdf[b] = accum / (tilePix + excess);
+      }
+      cdfs[ty][tx] = cdf;
+    }
+  }
+
+  const outData = new Uint8ClampedArray(data.length);
+  outData.set(data);
+
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    const ty = (y / tileH) - 0.5;
+    const ty0 = clamp(Math.floor(ty), 0, numTilesY - 1);
+    const ty1 = clamp(ty0 + 1, 0, numTilesY - 1);
+    const dy = clamp(ty - ty0, 0, 1);
+
+    for (let x = 0; x < w; x++) {
+      const idx = row + x;
+      const tx = (x / tileW) - 0.5;
+      const tx0 = clamp(Math.floor(tx), 0, numTilesX - 1);
+      const tx1 = clamp(tx0 + 1, 0, numTilesX - 1);
+      const dx = clamp(tx - tx0, 0, 1);
+
+      const yOld = luma[idx]!;
+      const bin = clamp(Math.round(yOld * 255), 0, 255);
+
+      const c00 = cdfs[ty0][tx0][bin];
+      const c10 = cdfs[ty0][tx1][bin];
+      const c01 = cdfs[ty1][tx0][bin];
+      const c11 = cdfs[ty1][tx1][bin];
+
+      const top = c00 * (1 - dx) + c10 * dx;
+      const bot = c01 * (1 - dx) + c11 * dx;
+      const yClahe = top * (1 - dy) + bot * dy;
+
+      const yNew = yOld * (1 - strength) + yClahe * strength;
+      const gain = clamp(yNew / Math.max(yOld, 1e-3), 0.6, 2.5);
+
+      const p = idx * 4;
+      for (let c = 0; c < 3; c++) {
+        let v = (data[p + c]! / 255) * gain;
+        // Soft-clip highlights: v / (1 + 0.15 * v)
+        v = (v / (1 + 0.15 * v)) * (1 + 0.15);
+        outData[p + c] = clamp(Math.round(v * 255), 0, 255);
+      }
+      outData[p + 3] = data[p + 3]!;
+    }
+  }
+
+  return new ImageData(outData, w, h);
 }
 
 /**

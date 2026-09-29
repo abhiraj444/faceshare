@@ -23,6 +23,7 @@
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",
     "@hookform/resolvers": "^5.7.0",
+    "@huggingface/transformers": "^4.3.0",
     "@imgly/background-removal": "^1.7.0",
     "@mediapipe/tasks-vision": "^0.10.21",
     "@radix-ui/react-accordion": "^1.2.12",
@@ -60,6 +61,7 @@
     "jose": "6.2.9",
     "kysely": "^0.28.5",
     "lucide-react": "^0.510.0",
+    "mp4-muxer": "^5.2.2",
     "pg": "^8.16.3",
     "react": "^19.2.0",
     "react-day-picker": "^9.14.0",

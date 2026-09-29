@@ -1,4 +1,4 @@
-export type ColorMode = "mono" | "hybrid" | "color";
+export type ColorMode = "mono" | "hybrid" | "color" | "dither";
 export type RenderTheme = "particle" | "water" | "glass" | "cosmic" | "gold";
 
 export interface Params {
@@ -20,16 +20,39 @@ export interface Params {
   motionSensor?: boolean;
   slowSway?: boolean;
   renderTheme?: RenderTheme;
+  // Upgrade Spec additions:
+  toneLift?: number;         // 0..1 CLAHE tone lift (default 1.0)
+  sizeVariation?: number;    // 0..1 per-particle density-based radius variation (default 0.6)
+  dofAperture?: number;      // 0..2 Depth of Field aperture (default 0.8)
+  relight?: number;          // 0..0.5 Normal-based relighting intensity (default 0.22)
+  bloom?: boolean;           // Bloom toggle (default auto/false)
+  adaptiveSampling?: boolean;// Analysis-by-synthesis adaptive pass (default true)
+  breathing?: boolean;       // Organic idle micro-breathing (default true)
+  autoHD?: boolean;          // Auto-apply Depth Anything V2 morph if available (default true)
+  zScale?: number;           // Depth scale multiplier (default 0.65)
+  focusZ?: number;           // Focal depth plane
 }
 
 export interface ParticleSet {
   count: number;
-  home: Float32Array;
+  home: Float32Array;        // 3 floats per particle: x, y, z
   restZ: Float32Array;
   tone: Uint8Array;
   seed: Float32Array;
-  color: Uint8Array;
+  color: Uint8Array;         // 3 bytes per particle: r, g, b
   semantic?: Uint8Array;
+  // Upgrade Spec additions:
+  size?: Uint8Array;         // 1 byte per particle: normalized 0..255 radius scale
+  normal?: Int8Array;        // 2 bytes per particle: nx, ny (reconstruct nz)
+  region?: Uint8Array;       // 1 byte: 0 other, 1 hair, 2 skin, 3 clothes, 4 identity feature
+  z1?: Float32Array;         // 1 float per particle: fused neural depth morph target
+  normal1?: Int8Array;       // 2 bytes per particle: fused neural normal
+  focusZ?: number;           // View-space focus plane depth
+  metrics?: {
+    mae: number;
+    ssim: number;
+    deltaE_roi?: number;
+  };
 }
 
 export interface Landmark {

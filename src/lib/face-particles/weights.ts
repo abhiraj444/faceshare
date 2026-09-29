@@ -56,7 +56,7 @@ export function percentileMasked(src: Float32Array, mask: Float32Array, p: numbe
   const hist = new Uint32Array(256);
   let n = 0;
   for (let i = 0; i < src.length; i++) {
-    if ((mask[i] ?? 0) < 0.35) continue;
+    if ((mask[i] ?? 0) < 0.25) continue;
     hist[clamp((src[i]! * 255) | 0, 0, 255)]++;
     n++;
   }
@@ -102,14 +102,16 @@ function featureMap(crop: CropResult): Float32Array {
   const ctx = canvas.getContext("2d");
   const out = new Float32Array(w * h);
   if (!ctx || !landmarks || landmarks.length < 80) return out;
+
   ctx.clearRect(0, 0, w, h);
   ctx.strokeStyle = "#fff";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  const width = Math.max(2, iod * 0.06);
+  const width = Math.max(1.5, iod * 0.035);
   const groups = featureGroups(getFaceLandmarkerClass());
+
   for (const g of groups) {
-    ctx.lineWidth = g.name.includes("Iris") || g.name === "lips" ? width * 1.15 : width;
+    ctx.lineWidth = g.name.includes("Iris") ? width * 1.2 : width;
     ctx.beginPath();
     for (const c of g.connections) {
       const a = landmarks[c.start];
@@ -120,11 +122,12 @@ function featureMap(crop: CropResult): Float32Array {
     }
     ctx.stroke();
   }
+
   const data = ctx.getImageData(0, 0, w, h).data;
   for (let i = 0, p = 0; i < out.length; i++, p += 4) {
     out[i] = data[p]! / 255;
   }
-  return blurChannel(out, w, h, Math.max(1, iod * 0.018));
+  return blurChannel(out, w, h, Math.max(1, iod * 0.015));
 }
 
 export function buildWeights(crop: CropResult, params: Params): WeightMaps {
@@ -135,16 +138,9 @@ export function buildWeights(crop: CropResult, params: Params): WeightMaps {
     lum[i] = (0.2126 * px[p]! + 0.7152 * px[p + 1]! + 0.0722 * px[p + 2]!) / 255;
   }
 
-  let hasHairSkin = false;
-  for (let i = 0; i < hairSkin.length; i++) {
-    if (hairSkin[i]! > 0.3) {
-      hasHairSkin = true;
-      break;
-    }
-  }
-  const toneMask = hasHairSkin ? hairSkin : faceSkin;
-  const p5 = percentileMasked(lum, toneMask, 0.03);
-  const p95 = Math.max(p5 + 0.04, percentileMasked(lum, toneMask, 0.97));
+  // Tonal normalization
+  const p5 = percentileMasked(lum, mask, 0.02);
+  const p95 = Math.max(p5 + 0.05, percentileMasked(lum, mask, 0.98));
   const tone = new Float32Array(w * h);
   const invRange = 1 / (p95 - p5);
   for (let i = 0; i < lum.length; i++) {
@@ -154,11 +150,11 @@ export function buildWeights(crop: CropResult, params: Params): WeightMaps {
   }
 
   const blurA = blurChannel(tone, w, h, 1.0);
-  const blurB = blurChannel(tone, w, h, 1.6);
+  const blurB = blurChannel(tone, w, h, 1.8);
   const edges = new Float32Array(w * h);
   const edgeHist = new Uint32Array(256);
   for (let i = 0; i < edges.length; i++) {
-    const e = clamp(Math.abs(blurA[i]! - blurB[i]!) * 6, 0, 1);
+    const e = clamp(Math.abs(blurA[i]! - blurB[i]!) * 5, 0, 1);
     edges[i] = e;
     edgeHist[(e * 255) | 0]++;
   }
@@ -178,36 +174,33 @@ export function buildWeights(crop: CropResult, params: Params): WeightMaps {
   for (let i = 0; i < edges.length; i++) edges[i] = clamp(edges[i]! * edgeNorm, 0, 1);
 
   const L = featureMap(crop);
-  const dil = dilate(mask, w, h, 1);
+  const dil = dilate(mask, w, h, 2);
   const maskSigma = Math.max(1.0, Math.min(w, h) * 0.006 * (0.5 + params.softness));
   const M = blurChannel(dil, w, h, maskSigma);
 
   const weight = new Float32Array(w * h);
-  const gamma = params.contrast;
+  const gamma = clamp(params.contrast, 0.6, 2.0);
   const a = params.detail;
   const b = params.feature;
   const floor = params.floor;
-  // Ensure balanced baseline particles across the subject without muddy densification
-  const subjFloor = params.invert
-    ? Math.min(floor, 0.05)
-    : Math.max(0.02, floor);
+  const subjFloor = params.invert ? Math.min(floor, 0.05) : Math.max(0.04, floor);
 
   for (let i = 0; i < weight.length; i++) {
-    // Feature & tone weighting: preserves high contrast between features and smooth regions
-    let wv = Math.pow(Math.max(tone[i]!, 1e-5), gamma) * (1 + a * edges[i]!) * (1 + b * L[i]!);
-    // Subtle shadow lift respecting user's floor parameter
-    const subjectMask = Math.max(hairSkin[i] ?? 0, (faceSkin[i] ?? 0));
-    wv = Math.max(wv, subjFloor * subjectMask * (1.0 + edges[i]! * 0.5));
+    // Rich, natural photographic importance weighting
+    let wv = Math.pow(Math.max(tone[i]!, 1e-4), gamma) * (1.0 + a * edges[i]!) * (1.0 + b * 0.6 * L[i]!);
+
+    // Ensure solid baseline particle coverage across the entire person (face, hair, AND dress/shoulders)
+    const m = mask[i] ?? 0;
+    const baseDensity = m * (subjFloor * 1.5);
+    wv = Math.max(wv, baseDensity * (0.7 + 0.6 * edges[i]!));
+
     if (params.removeBg) {
       const rawM = mask[i] ?? 0;
-      const m = M[i]!;
-      // Clean background cutoff: completely erases particles from room, wall, desk, or paper background
-      if (rawM < 0.03 && m < 0.12) {
-        wv = 0;
-      } else if (m < 0.08) {
+      const smoothM = M[i]!;
+      if (rawM < 0.02 && smoothM < 0.08) {
         wv = 0;
       } else {
-        wv = wv * Math.pow(m, 1.35);
+        wv = wv * Math.pow(smoothM, 1.2);
       }
     }
     weight[i] = wv;
@@ -215,14 +208,16 @@ export function buildWeights(crop: CropResult, params: Params): WeightMaps {
 
   const semantics = new Uint8Array(w * h);
   for (let i = 0; i < semantics.length; i++) {
-    if (L[i]! > 0.15) {
-      semantics[i] = 3; // Feature: eyes, brows, lips, irises
+    if (L[i]! > 0.25) {
+      semantics[i] = 4; // Identity feature (eyes, mouth, brows)
     } else if ((faceSkin[i] ?? 0) > 0.45) {
-      semantics[i] = 2; // Facial skin / complexion
+      semantics[i] = 2; // Facial skin
     } else if ((hairSkin[i] ?? 0) > 0.45) {
       semantics[i] = 1; // Hair
+    } else if ((mask[i] ?? 0) > 0.25) {
+      semantics[i] = 3; // Clothes / body
     } else {
-      semantics[i] = 0; // Other / torso / clothing
+      semantics[i] = 0; // Other / background
     }
   }
 

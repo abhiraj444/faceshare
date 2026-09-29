@@ -10,6 +10,31 @@ export const ORBIT_LIMIT = (25 * Math.PI) / 180;
 export const TOUCH_RADIUS_FRAC = 0.12;
 export const BLUE_NOISE_SIZE = 128;
 
+export const FEATURES = {
+  toneNormalization: true,
+  areaAvgColor: true,
+  variableRadius: true,
+  identityBudget: true,
+  filmicTone: true,
+  depthOfField: true,
+  depthFusion: true,
+  silhouetteInflation: true,
+  grazingDissolve: true,
+  relighting: true,
+  adaptiveSampling: true,
+  breathing: true,
+};
+
+export function isLegacyMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("legacy") === "1";
+}
+
+export function isDebugMode(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("debug") === "1";
+}
+
 export const DEFAULT_PARAMS: Params = {
   particles: N_DEFAULT,
   size: 2.2,
@@ -29,6 +54,16 @@ export const DEFAULT_PARAMS: Params = {
   motionSensor: false, // Disabled by default per user request; device tilt won't shake portrait
   slowSway: true, // Smooth continuous left-to-right gentle sway
   renderTheme: "particle",
+  toneLift: 1.0,
+  sizeVariation: 0.6,
+  dofAperture: 0.8,
+  relight: 0.22,
+  bloom: false,
+  adaptiveSampling: true,
+  breathing: true,
+  autoHD: true,
+  zScale: 0.65,
+  focusZ: 0.0,
 };
 
 const HASH_KEYS: (keyof Params)[] = [
@@ -50,6 +85,15 @@ const HASH_KEYS: (keyof Params)[] = [
   "motionSensor",
   "slowSway",
   "renderTheme",
+  "toneLift",
+  "sizeVariation",
+  "dofAperture",
+  "relight",
+  "bloom",
+  "adaptiveSampling",
+  "breathing",
+  "autoHD",
+  "zScale",
 ];
 
 export function defaultParticleCount(): number {

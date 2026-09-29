@@ -116,6 +116,17 @@ export class ParticleEngine {
   effectT = 0;
   effectAmp = 0;
   effectOrigin: [number, number] = [0, 0];
+  
+  // Spec Additions:
+  focusZ = 0.0;
+  dofAperture = 0.8;
+  relight = 0.22;
+  sizeVariation = 0.6;
+  lightDir: [number, number, number] = [0.4, 0.6, 0.7];
+  regionDelays: Float32Array = new Float32Array([0.0, 0.0, 0.3, 0.05, 0.6]);
+
+  private sizeBuf: WebGLBuffer | null = null;
+  private normalBuf: WebGLBuffer | null = null;
   private state: AnimState = "building";
   private effectTimer = 0;
   private effectName: EffectName | null = null;
@@ -187,14 +198,17 @@ export class ParticleEngine {
       this.renderProg = link(gl, RENDER_VS, RENDER_FS);
       this.uUpdate = this.uniforms(this.updateProg, [
         "uDt", "uTime", "uSpring", "uDamp", "uAssemble", "uTurb",
-        "uMode", "uEffectT", "uEffectAmp", "uEffectOrigin",
+        "uMode", "uEffectT", "uEffectAmp", "uEffectOrigin", "uCount",
       ]);
       for (let i = 0; i < 5; i++) {
         this.uUpdate[`uTouch[${i}]`] = gl.getUniformLocation(this.updateProg, `uTouch[${i}]`);
         this.uUpdate[`uTouchVel[${i}]`] = gl.getUniformLocation(this.updateProg, `uTouchVel[${i}]`);
+        this.uUpdate[`uRegionDelay[${i}]`] = gl.getUniformLocation(this.updateProg, `uRegionDelay[${i}]`);
       }
       this.uRender = this.uniforms(this.renderProg, [
-        "uViewProj", "uSize", "uDpr", "uPointRange", "uTime", "uBreath", "uColorMode", "uColorMix", "uInvert", "uDistScale", "uRadiance",
+        "uViewProj", "uView", "uSize", "uDpr", "uPointRange", "uTime", "uBreath",
+        "uColorMode", "uColorMix", "uInvert", "uDistScale", "uRadiance",
+        "uFocusZ", "uAperture", "uMaxBokeh", "uRelight", "uLightDir", "uSizeVariation",
       ]);
       this.bindInput();
 
@@ -256,6 +270,7 @@ export class ParticleEngine {
     if (this.posBuf) { delBuf(this.posBuf[0]); delBuf(this.posBuf[1]); }
     if (this.velBuf) { delBuf(this.velBuf[0]); delBuf(this.velBuf[1]); }
     delBuf(this.homeBuf); delBuf(this.seedBuf); delBuf(this.toneBuf); delBuf(this.colorBuf); delBuf(this.semanticBuf);
+    delBuf(this.sizeBuf); delBuf(this.normalBuf);
     if (this.updateProg) gl.deleteProgram(this.updateProg);
     if (this.renderProg) gl.deleteProgram(this.renderProg);
   }
@@ -269,6 +284,9 @@ export class ParticleEngine {
     this.set = set;
     this.maxCount = set.count;
     this.drawCount = set.count;
+    if (set.focusZ !== undefined) {
+      this.focusZ = set.focusZ;
+    }
     const gl = this.gl;
     if (!gl) return;
 
@@ -305,11 +323,16 @@ export class ParticleEngine {
     if (this.toneBuf) gl.deleteBuffer(this.toneBuf);
     if (this.colorBuf) gl.deleteBuffer(this.colorBuf);
     if (this.semanticBuf) gl.deleteBuffer(this.semanticBuf);
+    if (this.sizeBuf) gl.deleteBuffer(this.sizeBuf);
+    if (this.normalBuf) gl.deleteBuffer(this.normalBuf);
+
     this.homeBuf = buf(set.home);
     this.seedBuf = buf(set.seed);
     this.toneBuf = buf(set.tone);
     this.colorBuf = buf(set.color);
     this.semanticBuf = buf(set.semantic ?? new Uint8Array(set.count));
+    this.sizeBuf = buf(set.size ?? new Uint8Array(set.count).fill(128));
+    this.normalBuf = buf(set.normal ?? new Int8Array(set.count * 2));
 
     const makeUpdateVao = (read: 0 | 1) => {
       const vao = gl.createVertexArray()!;
@@ -326,6 +349,11 @@ export class ParticleEngine {
       gl.bindBuffer(gl.ARRAY_BUFFER, this.seedBuf);
       gl.enableVertexAttribArray(3);
       gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 0, 0);
+      if (this.semanticBuf) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.semanticBuf);
+        gl.enableVertexAttribArray(4);
+        gl.vertexAttribPointer(4, 1, gl.UNSIGNED_BYTE, false, 0, 0);
+      }
       gl.bindVertexArray(null);
       return vao;
     };
@@ -348,6 +376,16 @@ export class ParticleEngine {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.semanticBuf);
         gl.enableVertexAttribArray(4);
         gl.vertexAttribPointer(4, 1, gl.UNSIGNED_BYTE, false, 0, 0);
+      }
+      if (this.sizeBuf) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.sizeBuf);
+        gl.enableVertexAttribArray(5);
+        gl.vertexAttribPointer(5, 1, gl.UNSIGNED_BYTE, true, 0, 0);
+      }
+      if (this.normalBuf) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.normalBuf);
+        gl.enableVertexAttribArray(6);
+        gl.vertexAttribPointer(6, 2, gl.BYTE, true, 0, 0);
       }
       gl.bindVertexArray(null);
       return vao;
@@ -407,7 +445,27 @@ export class ParticleEngine {
   }
 
   setRadiance(r: number): void {
-    this.radiance = clamp(r, 0.4, 2.2);
+    this.radiance = clamp(r, 0.4, 2.5);
+  }
+
+  setDofAperture(a: number): void {
+    this.dofAperture = clamp(a, 0, 2);
+  }
+
+  setFocusZ(z: number): void {
+    this.focusZ = z;
+  }
+
+  setRelight(r: number): void {
+    this.relight = clamp(r, 0, 0.5);
+  }
+
+  setSizeVariation(v: number): void {
+    this.sizeVariation = clamp(v, 0, 1);
+  }
+
+  setBreathing(on: boolean): void {
+    this.breath = on ? 0.012 : 0.0;
   }
 
   getUserZoom(): number {
@@ -620,6 +678,11 @@ export class ParticleEngine {
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, vel);
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+
+  stepDeterministic(dt: number, time: number): void {
+    this.time = time;
+    this.simulate(dt);
   }
 
   snapshot(): Promise<Blob> {
@@ -843,6 +906,10 @@ export class ParticleEngine {
     gl.uniform1f(this.uUpdate.uEffectT, this.effectT);
     gl.uniform1f(this.uUpdate.uEffectAmp, this.effectAmp);
     gl.uniform2f(this.uUpdate.uEffectOrigin, this.effectOrigin[0], this.effectOrigin[1]);
+    gl.uniform1f(this.uUpdate.uCount, this.drawCount);
+    for (let i = 0; i < 5; i++) {
+      gl.uniform1f(this.uUpdate[`uRegionDelay[${i}]`] ?? null, this.regionDelays[i] ?? 0.0);
+    }
     for (let i = 0; i < TOUCH_SLOTS; i++) {
       const t = this.touches[i]!;
       gl.uniform4f(this.uUpdate[`uTouch[${i}]`] ?? null, t.x, t.y, t.z, t.w);
@@ -1017,6 +1084,16 @@ export class ParticleEngine {
     const distScale = 2.45 / Math.max(0.1, this.currentCameraDist);
     gl.uniform1f(this.uRender.uDistScale, distScale);
     gl.uniform1f(this.uRender.uRadiance, this.radiance);
+
+    // Spec additions:
+    gl.uniformMatrix4fv(this.uRender.uView, false, this.view);
+    gl.uniform1f(this.uRender.uFocusZ, this.focusZ);
+    gl.uniform1f(this.uRender.uAperture, this.dofAperture);
+    gl.uniform1f(this.uRender.uMaxBokeh, 2.5);
+    gl.uniform1f(this.uRender.uRelight, this.relight);
+    gl.uniform3f(this.uRender.uLightDir, this.lightDir[0], this.lightDir[1], this.lightDir[2]);
+    gl.uniform1f(this.uRender.uSizeVariation, this.sizeVariation);
+
     gl.bindVertexArray(this.vaoRender[this.ping as 0 | 1]);
     gl.drawArrays(gl.POINTS, 0, n);
     gl.bindVertexArray(null);

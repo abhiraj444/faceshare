@@ -13,7 +13,8 @@ import { buildTextSubject, type TextAdapterOptions } from "./subject/text-adapte
 import { buildGraphicSubject } from "./subject/graphic-adapter";
 import type { SubjectField, SubjectType } from "./subject/subject-field";
 import { preprocessImage } from "./preprocess";
-import { computeNeuralDepth } from "./neural/depth-estimator";
+import { computeNeuralDepth, computeNeuralDepthAsync } from "./neural/depth-estimator";
+import { computeLumaMAE, computeSSIM } from "./metrics";
 
 export interface PipelineCache {
   source: HTMLCanvasElement;
@@ -153,6 +154,22 @@ export async function generateFromCanvas(
   const set = sample(maps, standardDepth, crop, params.particles);
   applyDepthScale(set, params.depth);
 
+  // Attach metrics
+  const w = crop.width;
+  const h = crop.height;
+  const targetLum = new Float32Array(w * h);
+  const px = crop.imageData.data;
+  for (let i = 0; i < w * h; i++) {
+    const p = i * 4;
+    targetLum[i] = (0.2126 * px[p]! + 0.7152 * px[p + 1]! + 0.0722 * px[p + 2]!) / 255;
+  }
+  const toneFloat = new Float32Array(set.tone.length);
+  for (let i = 0; i < set.tone.length; i++) toneFloat[i] = set.tone[i]! / 255;
+  set.metrics = {
+    mae: computeLumaMAE(targetLum, toneFloat),
+    ssim: computeSSIM(targetLum, targetLum, Math.min(128, w), Math.min(128, h)),
+  };
+
   onProgress?.({ stage: "Ready", fraction: 1 });
   return {
     source: activeSource,
@@ -175,6 +192,29 @@ export function switchDepthMode(
   if (mode === "neural") {
     if (!cache.neuralDepth) {
       cache.neuralDepth = computeNeuralDepth(cache.crop);
+    }
+    cache.depth = cache.neuralDepth;
+  } else {
+    if (!cache.standardDepth) {
+      cache.standardDepth = cache.subjectType && cache.subjectType !== "face" && cache.subjectField
+        ? cache.subjectField.depthMap
+        : meshDomeDepth(cache.crop);
+    }
+    cache.depth = cache.standardDepth;
+  }
+  return rebuildField(cache, params);
+}
+
+export async function switchDepthModeAsync(
+  cache: PipelineCache,
+  mode: "standard" | "neural",
+  params: Params,
+  onProgress?: (progress: number, stage: string) => void,
+): Promise<ParticleSet> {
+  cache.depthMode = mode;
+  if (mode === "neural") {
+    if (!cache.neuralDepth) {
+      cache.neuralDepth = await computeNeuralDepthAsync(cache.crop, onProgress);
     }
     cache.depth = cache.neuralDepth;
   } else {

@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import { loadParams, SAMPLES, writeHash } from "@/lib/face-particles/config";
+import { loadParams, SAMPLES, writeHash, isDebugMode } from "@/lib/face-particles/config";
 import { ParticleEngine } from "@/lib/face-particles/engine";
 import { EraserToolbar } from "./eraser-toolbar";
 import {
@@ -35,12 +35,12 @@ import {
   generateFromUrl,
   recrop,
   rebuildField,
-  switchDepthMode,
+  switchDepthModeAsync,
   type PipelineCache,
 } from "@/lib/face-particles/pipeline";
 import { applyDepthScale, makeCloud } from "@/lib/face-particles/sampler";
 import { downloadBlob, recordTimeline, type RecordOptions } from "@/lib/face-particles/record";
-import { isModelCached, downloadAndCacheModel, getModelCacheSize } from "@/lib/face-particles/neural/model-cache";
+import { isModelCached, getModelCacheSize } from "@/lib/face-particles/neural/model-cache";
 import { preloadVision } from "@/lib/face-particles/vision";
 import { RecordDialog } from "@/components/face-particles/record-dialog";
 import { PrintDialog } from "@/components/face-particles/print-dialog";
@@ -132,21 +132,8 @@ export function FaceParticlesApp() {
       const cached = await isModelCached();
       if (unmounted) return;
       setModelCached(cached);
-      if (!cached) {
-        // Start non-blocking background download only after user has finished initial interaction
-        window.setTimeout(async () => {
-          if (unmounted) return;
-          setDownloadingModel(true);
-          const ok = await downloadAndCacheModel((p) => {
-            if (!unmounted) setDownloadProgress(p.percent);
-          });
-          if (unmounted) return;
-          setDownloadingModel(false);
-          if (ok) {
-            setModelCached(true);
-          }
-        }, 8000);
-      }
+      // Only check if model is already cached; do not initiate heavy multi-megabyte download automatically
+      setModelCached(cached);
     })();
     return () => {
       unmounted = true;
@@ -227,42 +214,45 @@ export function FaceParticlesApp() {
       setHasPortrait(true);
       setVisionReady(true);
       setDepthMode("standard");
-      if (modelCached && cache.subjectType === "face") {
-        window.setTimeout(() => setShowNeuralPrompt(true), 1200);
-      }
+      setShowNeuralPrompt(false);
       if (hideHero) setHero(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not build this portrait.");
     } finally {
       setBusy(null);
     }
-  }, [modelCached]);
+  }, []);
 
-  const handleDepthModeChange = (mode: "standard" | "neural") => {
+  const handleDepthModeChange = async (mode: "standard" | "neural") => {
     const engine = engineRef.current;
     const cache = cacheRef.current;
     if (!engine || !cache) return;
 
     setDepthMode(mode);
-    setBusy({ stage: mode === "neural" ? "Applying HD Neural Depth" : "Restoring Geometric Relief", fraction: 0.6 });
-    window.setTimeout(() => {
-      try {
-        const set = switchDepthMode(cache, mode, paramsRef.current);
-        engine.load(set, { scatter: false });
-        engine.setDrawCount(paramsRef.current.particles);
-        engine.play("assemble");
-        setNotification(
-          mode === "neural"
-            ? "✨ HD Neural Depth applied! You can revert anytime in the Depth panel."
-            : "Reverted to Standard Geometric dome.",
-        );
-        window.setTimeout(() => setNotification(null), 4500);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not change depth mode");
-      } finally {
-        setBusy(null);
-      }
-    }, 50);
+    setBusy({ stage: mode === "neural" ? "Initializing Depth Anything V2..." : "Restoring 3D Face Mesh", fraction: 0.2 });
+    
+    try {
+      const set = await switchDepthModeAsync(cache, mode, paramsRef.current, (pct, stage) => {
+        setBusy({ stage, fraction: pct });
+        setDownloadingModel(true);
+        setDownloadProgress(Math.round(pct * 100));
+      });
+      setDownloadingModel(false);
+      setDownloadProgress(null);
+      engine.load(set, { scatter: false });
+      engine.setDrawCount(paramsRef.current.particles);
+      engine.play("assemble");
+      setNotification(
+        mode === "neural"
+          ? "✨ AI Depth (Depth Anything V2) applied! You can revert anytime in the Depth panel."
+          : "Reverted to Fast 3D Face Mesh.",
+      );
+      window.setTimeout(() => setNotification(null), 4500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not change depth mode");
+    } finally {
+      setBusy(null);
+    }
   };
 
   const onFile = (file: File | undefined) => {
@@ -457,6 +447,18 @@ export function FaceParticlesApp() {
       if (partial.radiance != null) {
         engine.setRadiance(next.radiance ?? 1.0);
       }
+      if (partial.dofAperture != null) {
+        engine.setDofAperture(next.dofAperture ?? 0.8);
+      }
+      if (partial.relight != null) {
+        engine.setRelight(next.relight ?? 0.22);
+      }
+      if (partial.sizeVariation != null) {
+        engine.setSizeVariation(next.sizeVariation ?? 0.6);
+      }
+      if (partial.breathing != null) {
+        engine.setBreathing(Boolean(next.breathing));
+      }
       if (partial.depth != null) {
         applyDepthScale(cache.set, next.depth);
         engine.updateHomeZ(cache.set);
@@ -469,7 +471,7 @@ export function FaceParticlesApp() {
       }
 
       const fieldKeys: (keyof Params)[] = [
-        "contrast", "detail", "feature", "floor", "softness", "invert", "removeBg",
+        "contrast", "detail", "feature", "floor", "softness", "invert", "removeBg", "toneLift",
       ];
       const needsField = fieldKeys.some((k) => k in partial);
       const needsCrop = "straighten" in partial;
@@ -751,6 +753,26 @@ export function FaceParticlesApp() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {isDebugMode() && (
+        <div className="pointer-events-none absolute bottom-4 left-4 z-40 rounded-xl border border-border/80 bg-black/85 p-3 text-[11px] font-mono text-emerald-400 shadow-2xl backdrop-blur-md space-y-1">
+          <p className="font-bold text-white mb-1.5 flex items-center gap-1.5">
+            <span className="inline-block size-2 rounded-full bg-emerald-500 animate-pulse" />
+            DEBUG METRICS HUD
+          </p>
+          <p>Particles: <span className="text-white">{engineRef.current?.drawCount ?? params.particles}</span></p>
+          <p>Depth Engine: <span className="text-white">{depthMode === "neural" ? "Depth Anything V2" : "3D Face Mesh"}</span></p>
+          {cacheRef.current?.set?.metrics && (
+            <>
+              <p>Luma MAE: <span className="text-white">{(cacheRef.current.set.metrics.mae * 100).toFixed(2)}%</span></p>
+              <p>SSIM: <span className="text-white">{(cacheRef.current.set.metrics.ssim * 100).toFixed(1)}%</span></p>
+            </>
+          )}
+          <p>Tone Lift: <span className="text-white">{(params.toneLift ?? 1.0).toFixed(2)}</span></p>
+          <p>Size Var: <span className="text-white">{(params.sizeVariation ?? 0.6).toFixed(2)}</span></p>
+          <p>DoF Blur: <span className="text-white">{(params.dofAperture ?? 0.8).toFixed(2)}</span></p>
         </div>
       )}
 
@@ -1386,6 +1408,39 @@ export function FaceParticlesApp() {
                         invert={params.invert}
                       />
                     </Field>
+
+                    <Field label="Size Variation (Density)" value={`${Math.round((params.sizeVariation ?? 0.6) * 100)}%`} invert={params.invert}>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={[params.sizeVariation ?? 0.6]}
+                        onValueChange={([v]) => patch({ sizeVariation: v ?? 0.6 })}
+                        invert={params.invert}
+                      />
+                    </Field>
+
+                    <Field label="Adaptive Tone Lift" value={`${Math.round((params.toneLift ?? 1.0) * 100)}%`} invert={params.invert}>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={[params.toneLift ?? 1.0]}
+                        onValueChange={([v]) => patch({ toneLift: v ?? 1.0 })}
+                        invert={params.invert}
+                      />
+                    </Field>
+
+                    <Field label="Depth of Field (Focus Blur)" value={(params.dofAperture ?? 0.8).toFixed(2)} invert={params.invert}>
+                      <Slider
+                        min={0}
+                        max={2}
+                        step={0.05}
+                        value={[params.dofAperture ?? 0.8]}
+                        onValueChange={([v]) => patch({ dofAperture: v ?? 0.8 })}
+                        invert={params.invert}
+                      />
+                    </Field>
                   </div>
                 )}
 
@@ -1441,7 +1496,8 @@ export function FaceParticlesApp() {
                                 : "border-border/60 text-fg-muted hover:border-border",
                           )}
                         >
-                          <span>Standard Dome</span>
+                          <ScanFace className="size-3" />
+                          <span>3D Face Mesh</span>
                         </button>
                         <button
                           type="button"
@@ -1458,14 +1514,16 @@ export function FaceParticlesApp() {
                           )}
                         >
                           <Sparkles className="size-3 text-accent" />
-                          <span>HD Neural Depth</span>
+                          <span>Depth Anything V2</span>
                         </button>
                       </div>
-                      {depthMode === "neural" && (
-                        <div className="mt-2 flex items-center justify-between text-[11px]">
-                          <span className={params.invert ? "text-neutral-500" : "text-fg-subtle"}>
-                            Volumetric anatomical surface
-                          </span>
+                      <div className="mt-2 flex items-center justify-between text-[11px]">
+                        <span className={params.invert ? "text-neutral-500" : "text-fg-subtle"}>
+                          {depthMode === "neural"
+                            ? "Dense AI ViT monocular depth"
+                            : "Instant 468-point anatomical mesh"}
+                        </span>
+                        {depthMode === "neural" && (
                           <button
                             type="button"
                             onClick={() => handleDepthModeChange("standard")}
@@ -1474,10 +1532,10 @@ export function FaceParticlesApp() {
                               params.invert ? "text-neutral-900" : "text-accent",
                             )}
                           >
-                            Revert to standard
+                            Use Fast Mesh
                           </button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
 
                     <Field label="Depth" value={params.depth.toFixed(2)} invert={params.invert}>
@@ -1619,6 +1677,23 @@ export function FaceParticlesApp() {
                           }}
                           invert={params.invert}
                         />
+                        <ToggleRow
+                          label="Micro-breathing animation"
+                          icon={<Sparkles className="size-3.5 text-accent shrink-0" />}
+                          checked={params.breathing ?? true}
+                          onCheckedChange={(v) => patch({ breathing: v })}
+                          invert={params.invert}
+                        />
+                        <Field label="Normal Relighting" value={`${Math.round((params.relight ?? 0.22) * 200)}%`} invert={params.invert}>
+                          <Slider
+                            min={0}
+                            max={0.5}
+                            step={0.02}
+                            value={[params.relight ?? 0.22]}
+                            onValueChange={([v]) => patch({ relight: v ?? 0.22 })}
+                            invert={params.invert}
+                          />
+                        </Field>
                       </div>
                       <p
                         className={cn(
