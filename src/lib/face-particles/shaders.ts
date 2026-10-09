@@ -236,7 +236,9 @@ void main() {
   
   // Clean point size calculation with subtle size variation
   float radScale = mix(1.0, 0.75 + 0.5 * aSize, uSizeVariation);
-  float size = uSize * uDpr * depthScale * distScale * radScale;
+  // Semantic point scale: crisp, dense points where identity lives
+  float semScale = sem == 4 ? 0.88 : (sem == 2 ? 0.92 : (sem == 3 ? 1.08 : 1.0));
+  float size = uSize * uDpr * depthScale * distScale * radScale * semScale;
   gl_PointSize = clamp(size, uPointRange.x, uPointRange.y);
 
   float tone = aTone;
@@ -245,6 +247,10 @@ void main() {
   // 100% faithful true original photo color reproduction
   // Linear channel scaling preserves exact hue angle and saturation
   vec3 exactColor = clamp(aColor * rad, 0.0, 1.0);
+  // Shadow lift: indoor selfies render skin too dark as sparse points.
+  // A gamma lift keeps hue but opens up midtones so the face reads first.
+  float liftK = (sem == 2 || sem == 4) ? 1.0 : (sem == 1 ? 0.5 : (sem == 3 ? 0.25 : 0.0));
+  exactColor = mix(exactColor, clamp(pow(exactColor, vec3(0.70)) * 1.06, 0.0, 1.0), liftK);
 
   vec3 col;
   float b = 0.95;
@@ -276,6 +282,28 @@ void main() {
       b = clamp(mix(monoB, 0.95, isCol), 0.1, 1.0);
     }
   }
+
+  // Gentle normal relight: multiplies the photo tone, never replaces it.
+  // Stored normals are the xy of a unit normal; rebuild z. Clamp so depth
+  // cliffs (face vs background) shade softly instead of becoming lines.
+  if (uRelight > 0.001 && sem != 0) {
+    vec2 nxy = clamp(aNormal, vec2(-0.7), vec2(0.7));
+    vec3 N = vec3(nxy, sqrt(max(1.0 - dot(nxy, nxy), 0.05)));
+    vec3 L = normalize(uLightDir);
+    float wrap = clamp((dot(N, L) + 0.5) / 1.5, 0.0, 1.0);
+    float k = clamp(uRelight * 2.0, 0.0, 1.0) * (sem == 3 ? 0.6 : 1.0);
+    b *= mix(1.0, 0.80 + 0.34 * wrap, k);
+  }
+
+  // Region grade (mono only, very subtle): ivory skin, steel clothes/hair.
+  if (uColorMode < 0.5 && uInvert < 0.5) {
+    if (sem == 2 || sem == 4) col = vec3(1.0, 0.965, 0.915);
+    else if (sem == 3) col = vec3(0.90, 0.945, 1.0);
+    else if (sem == 1) col = vec3(0.95, 0.965, 1.0);
+  }
+
+  // Let bright clothing recede so the face stays the subject
+  if (sem == 3) b *= 0.80;
 
   // Eye catch-light shimmer on identity region (sem == 4)
   if (sem == 4) {
