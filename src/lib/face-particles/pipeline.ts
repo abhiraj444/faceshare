@@ -163,11 +163,31 @@ export async function generateFromCanvas(
     const p = i * 4;
     targetLum[i] = (0.2126 * px[p]! + 0.7152 * px[p + 1]! + 0.0722 * px[p + 2]!) / 255;
   }
-  const toneFloat = new Float32Array(set.tone.length);
-  for (let i = 0; i < set.tone.length; i++) toneFloat[i] = set.tone[i]! / 255;
+  // Compare a splatted render of the particle field against the photo
+  // (previously SSIM compared the target with itself).
+  const mw = Math.min(128, w);
+  const mh = Math.max(1, Math.round((mw * h) / w));
+  const tgt = new Float32Array(mw * mh);
+  for (let y = 0; y < mh; y++) {
+    for (let x = 0; x < mw; x++) {
+      const sx = Math.min(w - 1, Math.floor(((x + 0.5) * w) / mw));
+      const sy = Math.min(h - 1, Math.floor(((y + 0.5) * h) / mh));
+      tgt[y * mw + x] = targetLum[sy * w + sx]!;
+    }
+  }
+  const ren = new Float32Array(mw * mh);
+  const asp = h / w;
+  for (let i = 0; i < set.count; i++) {
+    const px2 = Math.floor(((set.home[i * 3]! + 1) * 0.5) * mw);
+    const py2 = Math.floor(((-set.home[i * 3 + 1]! / asp + 1) * 0.5) * mh);
+    if (px2 >= 0 && px2 < mw && py2 >= 0 && py2 < mh) ren[py2 * mw + px2] += set.tone[i]! / 255;
+  }
+  let rmax = 1e-6;
+  for (let i = 0; i < ren.length; i++) rmax = Math.max(rmax, ren[i]!);
+  for (let i = 0; i < ren.length; i++) ren[i] = Math.min(1, ren[i]! / (rmax * 0.6));
   set.metrics = {
-    mae: computeLumaMAE(targetLum, toneFloat),
-    ssim: computeSSIM(targetLum, targetLum, Math.min(128, w), Math.min(128, h)),
+    mae: computeLumaMAE(tgt, ren),
+    ssim: computeSSIM(tgt, ren, mw, mh),
   };
 
   onProgress?.({ stage: "Ready", fraction: 1 });
