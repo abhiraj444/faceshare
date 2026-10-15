@@ -244,21 +244,17 @@ void main() {
   float tone = aTone;
   float rad = clamp(uRadiance, 0.5, 2.5);
 
-  // 100% faithful true original photo color reproduction
-  // Linear channel scaling preserves exact hue angle and saturation
+  // 100% faithful true original photo color reproduction (§21A, §30.2)
+  // Direct camera sensor color preserves exact skin melanin, undertone, and hue angle
   vec3 exactColor = clamp(aColor * rad, 0.0, 1.0);
-  // Shadow lift: indoor selfies render skin too dark as sparse points.
-  // A gamma lift keeps hue but opens up midtones so the face reads first.
-  float liftK = (sem == 2 || sem == 4) ? 1.0 : (sem == 1 ? 0.5 : (sem == 3 ? 0.25 : 0.0));
-  exactColor = mix(exactColor, clamp(pow(exactColor, vec3(0.70)) * 1.06, 0.0, 1.0), liftK);
 
   vec3 col;
-  float b = 0.95;
+  float b = 0.98;
 
-  // 0.0 = Mono, 1.0 = Color, 2.0 = Hybrid
+  // 0.0 = Mono, 1.0 = Color (Photographic 1:1), 2.0 = Hybrid
   if (uColorMode > 0.5 && uColorMode < 1.5) {
     col = exactColor;
-    b = 0.95;
+    b = 0.98;
   } else if (uColorMode < 0.5) {
     // Monochrome Mode: Clean silver on dark
     if (uInvert < 0.5) {

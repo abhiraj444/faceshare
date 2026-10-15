@@ -190,9 +190,11 @@ export function buildWeights(crop: CropResult, params: Params): WeightMaps {
     let wv = Math.pow(Math.max(tone[i]!, 1e-4), gamma) * (1.0 + a * edges[i]!) * (1.0 + b * 0.6 * L[i]!);
 
     // Ensure solid baseline particle coverage across the entire person (face, hair, AND dress/shoulders)
+    // Bounded Additive-Mixture Importance Formulation (§24) to avoid skin starvation
     const m = mask[i] ?? 0;
-    const baseDensity = m * (subjFloor * 1.5);
-    wv = Math.max(wv, baseDensity * (0.7 + 0.6 * edges[i]!));
+    const skinW = faceSkin[i] ?? 0;
+    const baseDensity = Math.max(m * (subjFloor * 1.5), skinW * 0.26 + m * 0.16);
+    wv = Math.max(wv, baseDensity * (0.75 + 0.55 * edges[i]!));
 
     if (params.removeBg) {
       const rawM = mask[i] ?? 0;

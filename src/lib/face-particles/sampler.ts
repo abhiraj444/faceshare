@@ -89,8 +89,14 @@ export function sample(
     const z01 = depth[pi] ?? 0;
     const wz = (z01 - 0.30) * 0.65;
 
-    home[i * 3] = wx;
-    home[i * 3 + 1] = wy;
+    // Perspective-Correct Camera Ray Unprojection (§18, §22):
+    // Unproject (wx, wy) along the virtual perspective camera ray (camera distance = 2.45)
+    // so that at the rest pose, the 3D projection reprojects to the exact 2D pixel coordinates.
+    const camDist = 2.45;
+    const unprojScale = (camDist - wz) / camDist;
+
+    home[i * 3] = wx * unprojScale;
+    home[i * 3 + 1] = wy * unprojScale;
     home[i * 3 + 2] = wz;
     restZ[i] = wz;
 
@@ -103,7 +109,11 @@ export function sample(
     color[i * 3 + 1] = px[p + 1]!;
     color[i * 3 + 2] = px[p + 2]!;
 
-    size[i] = 128; // Crisp 1.0x point size
+    // Inverse square-root coverage-preserving sizing law (§27, §31):
+    // Expands footprint in smooth skin regions to tile seamlessly, while keeping eyes/lips crisp
+    const localWeight = Math.max(0.06, maps.weight[pi] ?? 0.5);
+    const densityScale = clamp(Math.sqrt(0.38 / localWeight), 0.78, 1.45);
+    size[i] = clampByte(128 * densityScale);
 
     const nx = clamp(normalsX[pi] ?? 0, -1, 1);
     const ny = clamp(normalsY[pi] ?? 0, -1, 1);

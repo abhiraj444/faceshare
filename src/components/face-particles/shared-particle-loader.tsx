@@ -49,6 +49,7 @@ export function SharedParticleLoader({
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const renderCtx = ctx;
 
     let animId = 0;
     let sphereYaw = 0;
@@ -224,7 +225,7 @@ export function SharedParticleLoader({
       const cx = width / 2;
       const cy = height / 2;
 
-      ctx.clearRect(0, 0, width, height);
+      renderCtx.clearRect(0, 0, width, height);
 
       // Continuous 3D rotation (yaw & gentle pitch wobble)
       sphereYaw += dt * (burstAge > 0 ? 1.8 : 0.65);
@@ -248,7 +249,7 @@ export function SharedParticleLoader({
 
         // Dispersion physics on complete
         if (burstAge > 0) {
-          if (p.vx === undefined) {
+          if (p.vx === undefined || p.vy === undefined || p.vz === undefined) {
             const mag = Math.hypot(p.x, p.y, p.z) || 1;
             const blastSpeed = (450 + Math.random() * 550) * dpr;
             p.vx = (p.x / mag) * blastSpeed;
@@ -288,10 +289,10 @@ export function SharedParticleLoader({
         const pointSize = Math.max(0.8, p.size * scale * (burstAge > 0 ? 1.3 : 1));
 
         // Draw crisp monochrome particle
-        ctx.fillStyle = `rgba(242, 240, 236, ${alpha.toFixed(3)})`;
-        ctx.beginPath();
-        ctx.arc(sx, sy, pointSize, 0, Math.PI * 2);
-        ctx.fill();
+        renderCtx.fillStyle = `rgba(242, 240, 236, ${alpha.toFixed(3)})`;
+        renderCtx.beginPath();
+        renderCtx.arc(sx, sy, pointSize, 0, Math.PI * 2);
+        renderCtx.fill();
       }
 
       // 2. Render 3D MONOCHROME Percentage Text Particles
@@ -307,7 +308,7 @@ export function SharedParticleLoader({
         const tp = textParticles[i];
 
         if (burstAge > 0) {
-          if (tp.vx === undefined) {
+          if (tp.vx === undefined || tp.vy === undefined || tp.vz === undefined) {
             tp.vx = (Math.random() - 0.5) * 600 * dpr;
             tp.vy = (Math.random() - 0.5) * 600 * dpr;
             tp.vz = (Math.random() - 0.5) * 600 * dpr;
@@ -342,16 +343,16 @@ export function SharedParticleLoader({
         }
 
         // Soft halo
-        ctx.fillStyle = `rgba(255, 255, 255, ${(alpha * 0.2).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.arc(sx, sy, pSize * 2.0, 0, Math.PI * 2);
-        ctx.fill();
+        renderCtx.fillStyle = `rgba(255, 255, 255, ${(alpha * 0.2).toFixed(3)})`;
+        renderCtx.beginPath();
+        renderCtx.arc(sx, sy, pSize * 2.0, 0, Math.PI * 2);
+        renderCtx.fill();
 
         // Core bright point
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(3)})`;
-        ctx.beginPath();
-        ctx.arc(sx, sy, pSize, 0, Math.PI * 2);
-        ctx.fill();
+        renderCtx.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(3)})`;
+        renderCtx.beginPath();
+        renderCtx.arc(sx, sy, pSize, 0, Math.PI * 2);
+        renderCtx.fill();
       }
 
       animId = requestAnimationFrame(render);

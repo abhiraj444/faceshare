@@ -58,7 +58,7 @@ export class ParticleEngine {
   onState?: (s: AnimState) => void;
 
   private set: ParticleSet | null = null;
-  private drawCount = 0;
+  drawCount = 0;
   private maxCount = 0;
   private ping = 0;
   private updateProg: WebGLProgram | null = null;
@@ -426,7 +426,7 @@ export class ParticleEngine {
     this.size = px;
   }
 
-  setColorMode(mode: boolean | number | "mono" | "hybrid" | "color"): void {
+  setColorMode(mode: boolean | number | "mono" | "hybrid" | "color" | "dither"): void {
     if (typeof mode === "string") {
       this.colorMode = mode === "color" ? 1 : mode === "hybrid" ? 2 : 0;
     } else if (typeof mode === "number") {

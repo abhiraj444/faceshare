@@ -32,7 +32,7 @@ async function compressBytes(bytes: Uint8Array): Promise<Uint8Array> {
     try {
       const cs = new CompressionStream("gzip");
       const writer = cs.writable.getWriter();
-      void writer.write(bytes);
+      void writer.write(bytes as unknown as BufferSource);
       void writer.close();
       const arrayBuffer = await new Response(cs.readable).arrayBuffer();
       return new Uint8Array(arrayBuffer);
@@ -49,7 +49,7 @@ async function decompressBytes(bytes: Uint8Array): Promise<Uint8Array> {
       try {
         const ds = new DecompressionStream("gzip");
         const writer = ds.writable.getWriter();
-        void writer.write(bytes);
+        void writer.write(bytes as unknown as BufferSource);
         void writer.close();
         const arrayBuffer = await new Response(ds.readable).arrayBuffer();
         return new Uint8Array(arrayBuffer);

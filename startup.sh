@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-cd /workspace
+cd "$(dirname "$0")"
 node scripts/preview.mjs stop || true
 if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:3000/; then
   exit 0

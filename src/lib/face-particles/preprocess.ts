@@ -9,6 +9,12 @@ export interface PreprocessOptions {
   cleanBackground?: boolean;
 }
 
+export interface PreprocessResult {
+  canvas: HTMLCanvasElement;
+  applied: boolean;
+  bgCleanResult?: BackgroundCleanResult;
+}
+
 const DEFAULT_OPTIONS: Required<PreprocessOptions> = {
   denoise: true,
   normalizeExposure: true,

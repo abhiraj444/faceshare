@@ -68,7 +68,7 @@ function headBounds(vision: VisionResult, srcW: number, srcH: number, chinLimitY
 export function headCrop(
   source: HTMLCanvasElement,
   vision: VisionResult,
-  params: Pick<Params, "straighten">,
+  params: Pick<Params, "straighten" | "removeBg">,
 ): CropResult {
   const { w: outW, h: outH } = workingSize();
   const srcW = source.width;

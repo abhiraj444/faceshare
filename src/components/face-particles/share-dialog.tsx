@@ -277,7 +277,7 @@ export function ShareDialog({
         <div className="mt-4 pt-3 border-t border-border/40 flex items-center justify-between gap-2">
           {typeof navigator !== "undefined" && "share" in navigator && (
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               onClick={handleNativeShare}
               disabled={loading || !shareUrl}

@@ -5,7 +5,6 @@ import {
   Contrast,
   Download,
   Eraser,
-  FlipHorizontal2,
   ImagePlus,
   Loader2,
   Printer,
@@ -21,6 +20,7 @@ import {
   Wind,
   X,
   Share2,
+  Columns2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -29,6 +29,8 @@ import { cn } from "@/lib/utils";
 import { loadParams, SAMPLES, writeHash, isDebugMode } from "@/lib/face-particles/config";
 import { ParticleEngine } from "@/lib/face-particles/engine";
 import { EraserToolbar } from "./eraser-toolbar";
+import { CompareDialog } from "./compare-dialog";
+import { clamp } from "@/lib/face-particles/math";
 import {
   generateFromFile,
   generateFromText,
@@ -90,7 +92,8 @@ export function FaceParticlesApp() {
   });
   const [sheet, setSheet] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
-  const [activeTab, setActiveTab] = useState<"style" | "depth" | "sensors">("style");
+  const [activeTab, setActiveTab] = useState<"style" | "motion" | "depth" | "color" | "scene">("style");
+  const [compareDialogOpen, setCompareDialogOpen] = useState(false);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
   const [glOk, setGlOk] = useState(true);
@@ -334,16 +337,24 @@ export function FaceParticlesApp() {
                   const dummyCanvas = document.createElement("canvas");
                   dummyCanvas.width = 1;
                   dummyCanvas.height = 1;
+                  const dummyCtx = dummyCanvas.getContext("2d");
+                  const dummyImageData = dummyCtx?.createImageData(1, 1) ?? new ImageData(1, 1);
 
                   cacheRef.current = {
-                    key: `shared_${data.id}`,
-                    params: { ...paramsRef.current },
+                    source: dummyCanvas,
                     crop: {
                       canvas: dummyCanvas,
-                      cropRect: [0, 0, 1, 1],
-                      sourceW: 1,
-                      sourceH: 1,
+                      imageData: dummyImageData,
+                      width: 1,
+                      height: 1,
+                      landmarks: null,
+                      mask: new Float32Array(1),
+                      hairSkin: new Float32Array(1),
+                      faceSkin: new Float32Array(1),
+                      iod: 1,
+                      hasFace: true,
                     },
+                    depth: new Float32Array(1),
                     vision: {
                       hasFace: true,
                       landmarks: null,
@@ -798,7 +809,7 @@ export function FaceParticlesApp() {
         <div className="pointer-events-auto flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar max-w-[calc(100vw-110px)] py-0.5 justify-end shrink">
           {isSharedMode && !hero && (
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               onClick={() => {
                 setIsSharedMode(false);
@@ -841,6 +852,24 @@ export function FaceParticlesApp() {
             )}
           >
             <Type className="size-4 sm:size-5" />
+          </Button>
+          <Button
+            variant="secondary"
+            size="icon"
+            aria-label="Compare 2D vs 3D"
+            title="Side-by-Side 2D vs 3D Verification"
+            disabled={!hasPortrait}
+            onClick={() => setCompareDialogOpen(true)}
+            className={cn(
+              "size-8 sm:size-9 shrink-0",
+              compareDialogOpen
+                ? "bg-emerald-500/25 text-emerald-300 border-emerald-500/50 shadow-md ring-1 ring-emerald-500/40"
+                : params.invert
+                  ? "border-neutral-300 bg-white/85 text-neutral-900 shadow-sm hover:bg-white backdrop-blur-md"
+                  : "text-emerald-400 hover:text-emerald-300 border-emerald-500/30 bg-emerald-500/10",
+            )}
+          >
+            <Columns2 className="size-4 sm:size-5" />
           </Button>
           <Button
             variant="secondary"
@@ -1215,18 +1244,20 @@ export function FaceParticlesApp() {
                   </div>
                 </div>
 
-                {/* Category Navigation Tabs */}
+                {/* Category Navigation Tabs (§5: STYLE, MOTION, DEPTH, COLOR, SCENE) */}
                 <div
                   className={cn(
-                    "grid grid-cols-3 gap-1 rounded-lg border p-0.5 mt-2.5 w-full",
+                    "grid grid-cols-5 gap-1 rounded-lg border p-0.5 mt-2.5 w-full",
                     params.invert ? "border-neutral-200 bg-neutral-100" : "border-border/60 bg-bg/50",
                   )}
                 >
                   {(
                     [
-                      ["style", "Style & Tone"],
-                      ["depth", "Depth & Form"],
-                      ["sensors", "Sensors"],
+                      ["style", "Style"],
+                      ["motion", "Motion"],
+                      ["depth", "Depth"],
+                      ["color", "Color"],
+                      ["scene", "Scene"],
                     ] as const
                   ).map(([id, label]) => {
                     const active = activeTab === id;
@@ -1236,7 +1267,7 @@ export function FaceParticlesApp() {
                         type="button"
                         onClick={() => setActiveTab(id)}
                         className={cn(
-                          "rounded-md py-1 text-[11px] font-medium transition-all text-center",
+                          "rounded-md py-1 text-[11px] font-medium transition-all text-center truncate",
                           active
                             ? params.invert
                               ? "bg-white text-neutral-950 font-semibold shadow-xs"
@@ -1255,138 +1286,59 @@ export function FaceParticlesApp() {
 
               {/* Tabbed Content Area */}
               <div className="flex-1 overflow-y-auto overscroll-contain px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 touch-pan-y">
+                {/* TAB 1: STYLE (§5: Surface Fill, Particles, Size, Density, Edge Softness) */}
                 {activeTab === "style" && (
                   <div className="flex flex-col gap-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span
+                    {/* Surface Fill Factor Coupling */}
+                    <div
+                      className={cn(
+                        "rounded-xl border p-2.5 transition-all",
+                        params.invert
+                          ? "border-neutral-200 bg-neutral-50/80"
+                          : "border-border/70 bg-bg-elevated/50",
+                      )}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span
+                          className={cn(
+                            "text-[11px] font-semibold uppercase tracking-[0.14em]",
+                            params.invert ? "text-neutral-700" : "text-fg-muted",
+                          )}
+                        >
+                          Surface Fill & Continuity
+                        </span>
+                        <span className="text-[10px] font-mono text-emerald-400">
+                          Coupled
+                        </span>
+                      </div>
+                      <Field
+                        label="Surface Fill Factor"
+                        value={`${Math.round((params.particles / 35000) * 100)}%`}
+                        invert={params.invert}
+                      >
+                        <Slider
+                          min={0.5}
+                          max={1.8}
+                          step={0.05}
+                          value={[clamp(params.particles / 35000, 0.5, 1.8)]}
+                          onValueChange={([fill]) => {
+                            const factor = fill ?? 1.0;
+                            const pCount = Math.round(clamp(35000 * factor, 12000, 60000));
+                            const pSize = Number((2.1 / Math.sqrt(pCount / 35000)).toFixed(1));
+                            patch({ particles: pCount, size: clamp(pSize, 1.2, 3.5) });
+                          }}
+                          invert={params.invert}
+                        />
+                      </Field>
+                      <p
                         className={cn(
-                          "text-xs font-medium uppercase tracking-[0.14em]",
+                          "mt-1 text-[10px] leading-relaxed",
                           params.invert ? "text-neutral-500" : "text-fg-subtle",
                         )}
                       >
-                        Particle Palette
-                      </span>
-                      <div className="w-32">
-                        <ToggleRow
-                          label="Invert"
-                          icon={<FlipHorizontal2 className="size-3.5" />}
-                          checked={params.invert}
-                          onCheckedChange={(v) => patch({ invert: v })}
-                          invert={params.invert}
-                        />
-                      </div>
+                        Couples particle count and point size in inverse ratio (r ∝ 1/√N) to guarantee watertight skin coverage with zero gaps.
+                      </p>
                     </div>
-
-                    <div
-                      className={cn(
-                        "grid grid-cols-3 gap-1 rounded-xl border p-1",
-                        params.invert
-                          ? "border-neutral-200 bg-neutral-100"
-                          : "border-border bg-bg-subtle",
-                      )}
-                    >
-                      {(
-                        [
-                          ["mono", "Mono", "B&W"],
-                          ["hybrid", "Hybrid", "Color + B&W"],
-                          ["color", "Color", "Full RGB"],
-                        ] as const
-                      ).map(([mode, label, sub]) => {
-                        const currentMode = params.colorStyle ?? (params.color ? "color" : "mono");
-                        const active = currentMode === mode;
-                        return (
-                          <button
-                            key={mode}
-                            type="button"
-                            onClick={() =>
-                              patch({
-                                colorStyle: mode,
-                                color: mode !== "mono",
-                              })
-                            }
-                            className={cn(
-                              "flex flex-col items-center justify-center rounded-lg py-1.5 px-1 text-center transition-all",
-                              active
-                                ? params.invert
-                                  ? "bg-white text-neutral-950 shadow-sm font-semibold border border-neutral-300"
-                                  : "bg-bg-elevated text-fg shadow-sm font-semibold border border-border/80"
-                                : params.invert
-                                  ? "text-neutral-600 hover:bg-white/60 hover:text-neutral-900"
-                                  : "text-fg-muted hover:bg-bg/50 hover:text-fg",
-                            )}
-                          >
-                            <span className="text-xs">{label}</span>
-                            <span
-                              className={cn(
-                                "text-[10px] tracking-tight",
-                                params.invert ? "text-neutral-500" : "text-fg-subtle",
-                              )}
-                            >
-                              {sub}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {(params.colorStyle ?? (params.color ? "color" : "mono")) === "hybrid" && (
-                      <div
-                        className={cn(
-                          "mt-1 rounded-xl border p-2.5",
-                          params.invert
-                            ? "border-neutral-200 bg-neutral-50"
-                            : "border-border/60 bg-bg/60",
-                        )}
-                      >
-                        <Field
-                          label="Hybrid Color Ratio (Photographic vs Silver)"
-                          value={`${Math.round((params.colorMix ?? 0.5) * 100)}% Color · ${Math.round((1 - (params.colorMix ?? 0.5)) * 100)}% Silver`}
-                          invert={params.invert}
-                        >
-                          <Slider
-                            min={0.1}
-                            max={0.9}
-                            step={0.05}
-                            value={[params.colorMix ?? 0.5]}
-                            onValueChange={([v]) => patch({ colorMix: v ?? 0.5 })}
-                            invert={params.invert}
-                          />
-                        </Field>
-                        <p
-                          className={cn(
-                            "mt-1 text-[11px]",
-                            params.invert ? "text-neutral-500" : "text-fg-subtle",
-                          )}
-                        >
-                          Seamlessly blends photographic skin and facial colors with silver monochrome particles.
-                        </p>
-                      </div>
-                    )}
-
-                    <Field
-                      label={params.invert ? "Ink Contrast & Brightness" : "Brightness & Exposure"}
-                      value={`${Math.round((params.radiance ?? 1.0) * 100)}%`}
-                      invert={params.invert}
-                    >
-                      <Slider
-                        min={0.5}
-                        max={1.8}
-                        step={0.05}
-                        value={[params.radiance ?? 1.0]}
-                        onValueChange={([v]) => patch({ radiance: v ?? 1.0 })}
-                        invert={params.invert}
-                      />
-                    </Field>
-                    <p
-                      className={cn(
-                        "-mt-1 text-[11px] leading-relaxed",
-                        params.invert ? "text-neutral-500" : "text-fg-subtle",
-                      )}
-                    >
-                      {params.invert
-                        ? "Scales ink exposure cleanly on white paper without altering original tones."
-                        : "100% matches exact original photo colors; adjust to brighten or darken with zero color shift."}
-                    </p>
 
                     <Field label="Particles" value={`${Math.round(params.particles / 1000)}k`} invert={params.invert}>
                       <Slider
@@ -1398,10 +1350,11 @@ export function FaceParticlesApp() {
                         invert={params.invert}
                       />
                     </Field>
+
                     <Field label="Point Size" value={params.size.toFixed(1)} invert={params.invert}>
                       <Slider
-                        min={1.2}
-                        max={3.5}
+                        min={1.0}
+                        max={3.8}
                         step={0.1}
                         value={[params.size]}
                         onValueChange={([v]) => patch({ size: v ?? params.size })}
@@ -1420,27 +1373,129 @@ export function FaceParticlesApp() {
                       />
                     </Field>
 
-                    <Field label="Adaptive Tone Lift" value={`${Math.round((params.toneLift ?? 1.0) * 100)}%`} invert={params.invert}>
-                      <Slider
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={[params.toneLift ?? 1.0]}
-                        onValueChange={([v]) => patch({ toneLift: v ?? 1.0 })}
-                        invert={params.invert}
-                      />
-                    </Field>
-
-                    <Field label="Depth of Field (Focus Blur)" value={(params.dofAperture ?? 0.8).toFixed(2)} invert={params.invert}>
+                    <Field label="Detail Density" value={params.detail.toFixed(2)} invert={params.invert}>
                       <Slider
                         min={0}
                         max={2}
                         step={0.05}
-                        value={[params.dofAperture ?? 0.8]}
-                        onValueChange={([v]) => patch({ dofAperture: v ?? 0.8 })}
+                        value={[params.detail]}
+                        onValueChange={([v]) => patch({ detail: v ?? params.detail })}
                         invert={params.invert}
                       />
                     </Field>
+
+                    <Field label="Silhouette Softness" value={params.softness.toFixed(2)} invert={params.invert}>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={[params.softness]}
+                        onValueChange={([v]) => patch({ softness: v ?? params.softness })}
+                        invert={params.invert}
+                      />
+                    </Field>
+                  </div>
+                )}
+
+                {/* TAB 2: MOTION (§5: Physics Presets, Micro-breathing, Forces) */}
+                {activeTab === "motion" && (
+                  <div className="flex flex-col gap-2.5">
+                    <div
+                      className={cn(
+                        "rounded-xl border p-2.5 transition-all",
+                        params.invert
+                          ? "border-neutral-200 bg-neutral-50/80"
+                          : "border-border/70 bg-bg-elevated/50",
+                      )}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span
+                          className={cn(
+                            "text-[11px] font-semibold uppercase tracking-[0.14em]",
+                            params.invert ? "text-neutral-700" : "text-fg-muted",
+                          )}
+                        >
+                          Interactive Physics Forces
+                        </span>
+                        <span className="text-[10px] text-fg-subtle">
+                          GPU Transform Feedback
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-5 gap-1">
+                        {(
+                          [
+                            ["disassemble", "Break", Aperture],
+                            ["wind", "Wave", Wind],
+                            ["ripple", "Ripple", Contrast],
+                            ["fill", "Fill", ScanFace],
+                            ["burst", "Burst", Sparkles],
+                          ] as const
+                        ).map(([id, label, Icon]) => (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => play(id)}
+                            className={cn(
+                              "flex flex-col items-center justify-center rounded-lg p-2 text-center text-xs font-medium border transition-colors",
+                              params.invert
+                                ? "border-neutral-200 hover:bg-neutral-100 text-neutral-800"
+                                : "border-border/60 hover:bg-bg-subtle text-fg-muted hover:text-fg",
+                              anim === "effect" && "border-accent text-accent",
+                            )}
+                          >
+                            <Icon className="size-4 mb-1" />
+                            <span className="text-[10px]">{label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <ToggleRow
+                      label="Micro-breathing animation"
+                      icon={<Sparkles className="size-3.5 text-accent shrink-0" />}
+                      checked={params.breathing ?? true}
+                      onCheckedChange={(v) => patch({ breathing: v })}
+                      invert={params.invert}
+                    />
+
+                    <Field label="Spring Stiffness" value="Locked Identity" invert={params.invert}>
+                      <Slider
+                        min={0.5}
+                        max={3.0}
+                        step={0.1}
+                        defaultValue={[1.5]}
+                        onValueChange={([v]) => {
+                          if (engineRef.current && v !== undefined) {
+                            engineRef.current.setForces({ assemble: v });
+                          }
+                        }}
+                        invert={params.invert}
+                      />
+                    </Field>
+
+                    <Field label="Ambient Turbulence" value="Natural Harmonic" invert={params.invert}>
+                      <Slider
+                        min={0}
+                        max={2.5}
+                        step={0.1}
+                        defaultValue={[0.8]}
+                        onValueChange={([v]) => {
+                          if (engineRef.current && v !== undefined) {
+                            engineRef.current.setForces({ turbulence: v });
+                          }
+                        }}
+                        invert={params.invert}
+                      />
+                    </Field>
+
+                    <p
+                      className={cn(
+                        "text-[10px] leading-relaxed",
+                        params.invert ? "text-neutral-500" : "text-fg-subtle",
+                      )}
+                    >
+                      Core facial features (eyes, nose, smile) have reinforced spring stiffness to lock identity and expression during motion.
+                    </p>
                   </div>
                 )}
 
@@ -1601,7 +1656,7 @@ export function FaceParticlesApp() {
                   </div>
                 )}
 
-                {activeTab === "sensors" && (
+                {activeTab === "scene" && (
                   <div className="flex flex-col gap-2.5">
                     <div className="grid grid-cols-2 gap-3">
                       <ToggleRow
@@ -1916,6 +1971,15 @@ export function FaceParticlesApp() {
           pitch: engineRef.current?.pitch ?? 0.04,
           zoom: engineRef.current?.getUserZoom() ?? 1.0,
         }}
+      />
+
+      <CompareDialog
+        isOpen={compareDialogOpen}
+        onClose={() => setCompareDialogOpen(false)}
+        sourceCanvas={cacheRef.current?.crop?.canvas ?? cacheRef.current?.source ?? null}
+        liveCanvas={canvasRef.current}
+        metrics={cacheRef.current?.set?.metrics}
+        colorStyle={params.colorStyle ?? (params.color ? "color" : "mono")}
       />
 
       {/* Shared structure loaded banner */}
